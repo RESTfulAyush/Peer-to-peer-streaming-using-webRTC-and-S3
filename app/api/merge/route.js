@@ -23,10 +23,18 @@ const s3 = new S3Client({
 
 export async function POST(request) {
   const { roomId } = await request.json();
-
   if (!roomId) {
     return new Response("Missing roomId", { status: 400 });
   }
+
+  // ✅ Merge lock
+  const lockFilePath = path.join(os.tmpdir(), `merge-${roomId}.lock`);
+  if (fs.existsSync(lockFilePath)) {
+    return new Response(JSON.stringify({ message: "Already merged" }), {
+      status: 200,
+    });
+  }
+  fs.writeFileSync(lockFilePath, "locked");
 
   const prefix = `recordings/${roomId}/`;
   const tmpDir = path.join(os.tmpdir(), `merge-${roomId}`);
@@ -70,19 +78,24 @@ export async function POST(request) {
 
   writeList.end();
 
-  // 3. Merge chunks using FFmpeg
+  // 3. Merge using FFmpeg
   const outputPath = path.join(tmpDir, "final.webm");
 
   await new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
+      "-y",
       "-f",
       "concat",
       "-safe",
       "0",
       "-i",
       listPath,
-      "-c",
-      "copy",
+      "-c:v",
+      "libvpx",
+      "-c:a",
+      "libopus",
+      "-b:v",
+      "2M",
       outputPath,
     ]);
 
@@ -96,7 +109,7 @@ export async function POST(request) {
     });
   });
 
-  // 4. Upload merged file back to S3
+  // 4. Upload final video
   const finalKey = `${prefix}final.webm`;
 
   await s3.send(
@@ -110,8 +123,6 @@ export async function POST(request) {
 
   return new Response(
     JSON.stringify({ message: "Merged successfully", key: finalKey }),
-    {
-      status: 200,
-    }
+    { status: 200 }
   );
 }
