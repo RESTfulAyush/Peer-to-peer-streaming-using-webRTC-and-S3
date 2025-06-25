@@ -1,9 +1,12 @@
+// AWS S3 SDK for interacting with S3
 import {
   S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
+
+// Node.js core modules for filesystem and child process
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -11,8 +14,10 @@ import { pipeline } from "stream";
 import { promisify } from "util";
 import os from "os";
 
+// Promisify stream pipeline
 const pump = promisify(pipeline);
 
+// Configure AWS S3 client
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -21,13 +26,17 @@ const s3 = new S3Client({
   },
 });
 
+// Handle POST request to merge video chunks
 export async function POST(request) {
   try {
     const { roomId } = await request.json();
+
+    // Validate roomId
     if (!roomId) {
       return new Response("Missing roomId", { status: 400 });
     }
 
+    // Use a lock file to prevent duplicate merges for the same room
     const lockFilePath = path.join(os.tmpdir(), `merge-${roomId}.lock`);
     if (fs.existsSync(lockFilePath)) {
       console.log("⛔ Merge already triggered for", roomId);
@@ -37,10 +46,12 @@ export async function POST(request) {
     }
     fs.writeFileSync(lockFilePath, "locked");
 
+    // Define S3 prefix and local temp directory
     const prefix = `recordings/${roomId}/`;
     const tmpDir = path.join(os.tmpdir(), `merge-${roomId}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
+    // List all objects under the room folder in S3
     const { Contents } = await s3.send(
       new ListObjectsV2Command({
         Bucket: process.env.S3_BUCKET_NAME,
@@ -48,6 +59,7 @@ export async function POST(request) {
       })
     );
 
+    // Filter .webm chunks for users
     const chunkKeys = (Contents || [])
       .map((obj) => obj.Key)
       .filter((key) => key.endsWith(".webm") && key.includes("user-"));
@@ -56,31 +68,32 @@ export async function POST(request) {
       throw new Error("No .webm chunks found for room " + roomId);
     }
 
-    // Group by user
+    // Group chunk keys by user folder
     const userChunks = new Map();
     for (const key of chunkKeys) {
       const parts = key.split("/");
-      const userFolder = parts[2];
+      const userFolder = parts[2]; // e.g., user-abc123
       if (!userChunks.has(userFolder)) userChunks.set(userFolder, []);
       userChunks.get(userFolder).push(key);
     }
 
-    // Pick user with most chunks
+    // Select the user with the most chunks to ensure a full recording
     const [selectedUser, selectedKeys] = [...userChunks.entries()].sort(
       (a, b) => b[1].length - a[1].length
     )[0];
 
-    selectedKeys.sort();
+    selectedKeys.sort(); // Sort chunks in order
     console.log(
       `🧩 Merging from user: ${selectedUser} (${selectedKeys.length} chunks)`
     );
 
-    // Download
+    // Create a file list for FFmpeg concat
     const listPath = path.join(tmpDir, "chunks.txt");
     const writeList = fs.createWriteStream(listPath);
 
+    // Download each chunk from S3 to temp directory and add to list
     for (const key of selectedKeys) {
-      const fileName = path.basename(key);
+      const fileName = path.basename(key); // chunk-0000.webm
       const filePath = path.join(tmpDir, fileName);
 
       try {
@@ -100,26 +113,27 @@ export async function POST(request) {
       }
     }
 
-    writeList.end();
+    writeList.end(); // Finish the chunks.txt file
 
-    // Merge
+    // Path to output merged file
     const outputPath = path.join(tmpDir, "final.webm");
 
+    // Merge the downloaded chunks using FFmpeg
     await new Promise((resolve, reject) => {
       const ffmpeg = spawn("ffmpeg", [
-        "-y",
+        "-y", // Overwrite if exists
         "-f",
-        "concat",
+        "concat", // Input is a list of files
         "-safe",
-        "0",
+        "0", // Allow unsafe file paths
         "-i",
-        listPath,
+        listPath, // Input list file
         "-c:v",
-        "libvpx",
+        "libvpx", // Video codec
         "-c:a",
-        "libopus",
+        "libopus", // Audio codec
         "-b:v",
-        "2M",
+        "2M", // Bitrate
         outputPath,
       ]);
 
@@ -137,6 +151,7 @@ export async function POST(request) {
       });
     });
 
+    // Upload the final merged file back to S3
     const finalKey = `${prefix}final.webm`;
     await s3.send(
       new PutObjectCommand({
