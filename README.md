@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
 
-## Getting Started
+# 🎥 DuoCast — Two-Person Video Calling with Local Recording & S3 Upload
 
-First, run the development server:
+## 💡 Idea Behind the Project
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+**DuoCast** was built to solve a common issue in WebRTC-based video calls:
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+> When network conditions are poor (e.g., low bandwidth, packet loss), the video becomes choppy and laggy because WebRTC uses **UDP**, which prioritizes speed over reliability.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+This affects **call quality** and makes any real-time recording unreliable if captured from the network stream.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## ❗ The Challenge
 
-To learn more about Next.js, take a look at the following resources:
+* **UDP-based WebRTC calls** don’t guarantee consistent video quality during poor connectivity.
+* **Recording remote streams** (via WebRTC) captures these same lags, freezes, or resolution drops.
+* Users end up with degraded video quality in their recordings, especially if one side had a bad connection.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## ✅ The Solution
 
-## Deploy on Vercel
+Instead of recording the WebRTC stream, we changed the model:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Each participant **records their own local video stream** in high quality using the `MediaRecorder` API.
+2. The recordings are **split into chunks** (e.g. every 2 seconds) and **uploaded to AWS S3** in the background.
+3. After the call ends, the backend **downloads the chunks from both users** and merges them into a **final video** showing both participants side by side.
+4. The final merged video uses each user's original local recording — not the lossy streamed version — giving **higher quality and better sync**, even in poor network conditions.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## 🚧 Current State
+
+* ✅ Local recording and background chunk uploads work reliably.
+* ⚠️ Server-side **merge logic** (FFmpeg-based) is **experimental** and requires improvement (sync, alignment).
+* 🧪 The app demonstrates the concept but is not production-ready yet.
