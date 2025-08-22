@@ -5,10 +5,10 @@ import { useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 
 export default function RoomPage({ params }) {
-  const { roomId } = use(params); // Get roomId from the URL
+  const { roomId } = use(params);
   const router = useRouter();
 
-  // Refs to store various resources
+  // Refs to store resources
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -20,7 +20,6 @@ export default function RoomPage({ params }) {
   const peerLeftRef = useRef(false);
   const callEndedRef = useRef(false);
 
-  // Runs once on component mount
   useEffect(() => {
     // Connect to signaling server via WebSocket
     const ws = new WebSocket("ws://localhost:3001");
@@ -28,11 +27,10 @@ export default function RoomPage({ params }) {
 
     // On WebSocket open, join the room
     ws.onopen = () => {
-      console.log("✅ Connected to signaling server");
+      console.log("Connected to signaling server");
       ws.send(JSON.stringify({ type: "join", roomId }));
     };
 
-    // Handle incoming signaling messages
     ws.onmessage = async (message) => {
       const { type, payload } = JSON.parse(message.data);
       const pc = peerConnectionRef.current;
@@ -63,11 +61,10 @@ export default function RoomPage({ params }) {
           checkIfShouldStop();
         }
       } catch (err) {
-        console.error("❌ Signaling error:", err);
+        console.error("Signaling error:", err);
       }
     };
 
-    // Initialize media and WebRTC peer connection
     initMediaAndPeer();
 
     // Cleanup on unmount
@@ -97,25 +94,20 @@ export default function RoomPage({ params }) {
     });
     mediaStreamRef.current = stream;
 
-    // Show local stream in UI
     if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-    // Assign or generate user ID
     userIdRef.current =
       localStorage.getItem("userId") || Math.random().toString(36).slice(2, 8);
     localStorage.setItem("userId", userIdRef.current);
     chunkIndexRef.current = 0;
 
-    // Create WebRTC peer connection
     const pc = new RTCPeerConnection();
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
-    // Send ICE candidates to remote peer
     pc.onicecandidate = (event) => {
       if (event.candidate) sendMessage("ice-candidate", event.candidate);
     };
 
-    // When remote track is received, show in UI
     pc.ontrack = (event) => {
       if (remoteVideoRef.current)
         remoteVideoRef.current.srcObject = event.streams[0];
@@ -123,21 +115,18 @@ export default function RoomPage({ params }) {
 
     peerConnectionRef.current = pc;
 
-    // Create and send offer after random delay (to avoid collision)
     setTimeout(async () => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       sendMessage("offer", offer);
     }, Math.random() * 1000);
 
-    // Wait until remote video is playing
     await waitForRemoteVideo();
 
-    // Start capturing a mixed stream of local+remote using canvas
     startMixedRecording();
   };
 
-  // Wait until remote video is ready (playing)
+  // Wait until remote video is ready
   const waitForRemoteVideo = () =>
     new Promise((resolve) => {
       const check = () => {
@@ -154,7 +143,6 @@ export default function RoomPage({ params }) {
     canvas.height = 480;
     const ctx = canvas.getContext("2d");
 
-    // Continuously draw local and remote video onto the canvas
     const drawFrame = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (localVideoRef.current?.readyState >= 2) {
@@ -179,15 +167,13 @@ export default function RoomPage({ params }) {
     };
     drawFrame();
 
-    const mixedStream = canvas.captureStream(25); // 25 fps
+    const mixedStream = canvas.captureStream(25);
 
-    // Record mixed stream in chunks
     const mediaRecorder = new MediaRecorder(mixedStream, {
       mimeType: "video/webm; codecs=vp8,opus",
       videoBitsPerSecond: 2_500_000,
     });
 
-    // On each chunk, upload it to S3 via pre-signed URL
     mediaRecorder.ondataavailable = async (event) => {
       if (callEndedRef.current || !event.data || event.data.size === 0) return;
 
@@ -206,15 +192,15 @@ export default function RoomPage({ params }) {
           headers: { "Content-Type": "video/webm" },
           body: chunk,
         });
-        console.log(`✅ Uploaded chunk ${chunkIndex} → ${key}`);
+        console.log(`Uploaded chunk ${chunkIndex} → ${key}`);
       } catch (error) {
-        console.error(`❌ Failed to upload chunk ${chunkIndex}`, error);
+        console.error(`Failed to upload chunk ${chunkIndex}`, error);
       }
     };
 
     // On recording stop, trigger video merge
     mediaRecorder.onstop = async () => {
-      console.log("🛑 Mixed recording stopped");
+      console.log("Mixed recording stopped");
       try {
         const res = await fetch("/api/merge", {
           method: "POST",
@@ -223,17 +209,16 @@ export default function RoomPage({ params }) {
         });
         if (!res.ok) throw new Error("Merge failed");
         const data = await res.json();
-        console.log("✅ Merge complete:", data);
+        console.log("Merge complete:", data);
       } catch (err) {
-        console.error("❌ Merge failed:", err);
+        console.error("Merge failed:", err);
       }
     };
 
-    mediaRecorder.start(2000); // Record in 2-second chunks
+    mediaRecorder.start(2000);
     mediaRecorderRef.current = mediaRecorder;
   };
 
-  // Stop recording if the other peer has left
   const checkIfShouldStop = () => {
     if (
       peerLeftRef.current &&
@@ -243,8 +228,7 @@ export default function RoomPage({ params }) {
       mediaRecorderRef.current.stop();
     }
   };
-
-  // Handle manual call end by user
+  r;
   const handleEndCall = async () => {
     callEndedRef.current = true;
 
@@ -252,8 +236,8 @@ export default function RoomPage({ params }) {
       mediaRecorderRef.current.stop();
     }
 
-    sendMessage("peer-left", null); // Notify other peer
-    router.push("/"); // Navigate back to home
+    sendMessage("peer-left", null);
+    router.push("/");
 
     // Attempt to merge chunks
     try {
@@ -264,10 +248,10 @@ export default function RoomPage({ params }) {
       });
       if (!res.ok) throw new Error("Merge failed");
       const data = await res.json();
-      alert("✅ Video merged and uploaded!");
+      alert("Video merged and uploaded!");
     } catch (err) {
-      console.error("❌ Merge error:", err);
-      alert("❌ Merge failed. Please try again.");
+      console.error("Merge error:", err);
+      alert("Merge failed. Please try again.");
     }
   };
 

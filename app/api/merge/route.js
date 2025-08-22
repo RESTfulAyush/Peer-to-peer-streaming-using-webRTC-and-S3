@@ -1,4 +1,3 @@
-// AWS S3 SDK for interacting with S3
 import {
   S3Client,
   ListObjectsV2Command,
@@ -6,7 +5,6 @@ import {
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// Node.js core modules for filesystem and child process
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -14,7 +12,6 @@ import { pipeline } from "stream";
 import { promisify } from "util";
 import os from "os";
 
-// Promisify stream pipeline
 const pump = promisify(pipeline);
 
 // Configure AWS S3 client
@@ -39,7 +36,7 @@ export async function POST(request) {
     // Use a lock file to prevent duplicate merges for the same room
     const lockFilePath = path.join(os.tmpdir(), `merge-${roomId}.lock`);
     if (fs.existsSync(lockFilePath)) {
-      console.log("⛔ Merge already triggered for", roomId);
+      console.log("Merge already triggered for", roomId);
       return new Response(JSON.stringify({ message: "Already merged" }), {
         status: 200,
       });
@@ -51,7 +48,6 @@ export async function POST(request) {
     const tmpDir = path.join(os.tmpdir(), `merge-${roomId}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
-    // List all objects under the room folder in S3
     const { Contents } = await s3.send(
       new ListObjectsV2Command({
         Bucket: process.env.S3_BUCKET_NAME,
@@ -72,7 +68,7 @@ export async function POST(request) {
     const userChunks = new Map();
     for (const key of chunkKeys) {
       const parts = key.split("/");
-      const userFolder = parts[2]; // e.g., user-abc123
+      const userFolder = parts[2];
       if (!userChunks.has(userFolder)) userChunks.set(userFolder, []);
       userChunks.get(userFolder).push(key);
     }
@@ -82,9 +78,9 @@ export async function POST(request) {
       (a, b) => b[1].length - a[1].length
     )[0];
 
-    selectedKeys.sort(); // Sort chunks in order
+    selectedKeys.sort();
     console.log(
-      `🧩 Merging from user: ${selectedUser} (${selectedKeys.length} chunks)`
+      `Merging from user: ${selectedUser} (${selectedKeys.length} chunks)`
     );
 
     // Create a file list for FFmpeg concat
@@ -93,7 +89,7 @@ export async function POST(request) {
 
     // Download each chunk from S3 to temp directory and add to list
     for (const key of selectedKeys) {
-      const fileName = path.basename(key); // chunk-0000.webm
+      const fileName = path.basename(key);
       const filePath = path.join(tmpDir, fileName);
 
       try {
@@ -106,14 +102,14 @@ export async function POST(request) {
 
         await pump(Body, fs.createWriteStream(filePath));
         writeList.write(`file '${fileName}'\n`);
-        console.log(`✅ Downloaded ${fileName}`);
+        console.log(`Downloaded ${fileName}`);
       } catch (err) {
-        console.error(`❌ Failed to download ${key}`, err);
+        console.error(`Failed to download ${key}`, err);
         throw err;
       }
     }
 
-    writeList.end(); // Finish the chunks.txt file
+    writeList.end();
 
     // Path to output merged file
     const outputPath = path.join(tmpDir, "final.webm");
@@ -143,7 +139,7 @@ export async function POST(request) {
 
       ffmpeg.on("close", (code) => {
         if (code === 0) {
-          console.log("✅ FFmpeg merge success");
+          console.log("FFmpeg merge success");
           resolve();
         } else {
           reject(new Error(`FFmpeg exited with code ${code}`));
@@ -162,14 +158,14 @@ export async function POST(request) {
       })
     );
 
-    console.log("✅ Uploaded merged final.webm to S3");
+    console.log("Uploaded merged final.webm to S3");
 
     return new Response(
       JSON.stringify({ message: "Merged successfully", key: finalKey }),
       { status: 200 }
     );
   } catch (error) {
-    console.error("❌ Merge failed:", error);
+    console.error("Merge failed:", error);
     return new Response(
       JSON.stringify({ message: "Merge failed", error: error.message }),
       { status: 500 }

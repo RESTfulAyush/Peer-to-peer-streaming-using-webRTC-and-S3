@@ -13,7 +13,6 @@ const s3 = new S3Client({
 
 // GET handler to generate a pre-signed URL for uploading video chunks
 export async function GET(request) {
-  // Extract the "key" query parameter from the request URL
   const { searchParams } = new URL(request.url);
   const key = searchParams.get("key");
 
@@ -26,9 +25,9 @@ export async function GET(request) {
 
   // Create a PutObjectCommand for uploading to S3 with the given key
   const command = new PutObjectCommand({
-    Bucket: process.env.S3_BUCKET_NAME, // Target S3 bucket
-    Key: key, // Object key (e.g., recordings/room123/user-abcd/chunk-0000.webm)
-    ContentType: "video/webm", // Set correct MIME type
+    Bucket: process.env.S3_BUCKET_NAME,
+    Key: key,
+    ContentType: "video/webm",
   });
 
   // Generate a signed URL valid for 60 seconds
