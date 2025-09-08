@@ -5,7 +5,7 @@
 
 **DuoCast** was built to solve a common issue in WebRTC-based video calls:
 
-> When network conditions are poor (e.g., low bandwidth, packet loss), the video becomes choppy and laggy because WebRTC uses **UDP**, which prioritizes speed over reliability.
+When network conditions are poor (e.g., low bandwidth, packet loss), the video becomes choppy and laggy because WebRTC uses **UDP**, which prioritizes speed over reliability.
 
 This affects **call quality** and makes any real-time recording unreliable if captured from the network stream.
 
