@@ -20,6 +20,7 @@ export const SocketProvider = ({ children }) => {
     </SocketContext.Provider>
   );
 };
-
-// 3️⃣ Custom hook (optional, but nice)
-export const useSocket = () => useContext(SocketContext);
+ 
+export const useSocket = () => {
+    return useContext(SocketContext)
+};
