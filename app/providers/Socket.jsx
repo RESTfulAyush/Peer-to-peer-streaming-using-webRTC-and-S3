@@ -9,7 +9,7 @@ const SocketContext = createContext({ socket: null });
 // 2️⃣ Provider component
 export const SocketProvider = ({ children }) => {
   const socket = useMemo(() => {
-    return io("http://localhost:8001", {
+    return io("http://localhost:8000", {
       transports: ["websocket"],
     });
   }, []);

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { SocketProvider } from "./providers/Socket";
+// import { SocketProvider } from "./providers/Socket";
 import { useSocket } from "./providers/Socket";
 import { Router } from "next/router";
 
