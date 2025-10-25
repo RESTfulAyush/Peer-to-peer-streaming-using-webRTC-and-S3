@@ -9,7 +9,7 @@ import { Router } from "next/router";
 export default function HomePage() {
   const router = useRouter();
   const { socket } = useSocket();
-  const [email, setEmail] = useState();
+  const [email, setEmail] = useState("");
   const [roomId, setRoomId] = useState();
 
   const handleRoomJoined = ({ roomId }) => {
