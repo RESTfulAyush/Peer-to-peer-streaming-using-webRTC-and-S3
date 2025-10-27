@@ -3,26 +3,41 @@
 import React, { useCallback, useEffect } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
+// import { useParams } from "next/navigation";
 
 const RoomPage = () => {
   const { socket } = useSocket();
   const { peer, createOffer } = usePeer();
+  // const params = useParams();
+  // const roomId = params.roomId;
 
-  // ✅ Corrected: "useeCallback" → "useCallback"
+  // const newUserJoined = useCallback(
+  //   async (data) => {
+  //     const { emailId } = data;
+  //     try {
+  //       const offer = await createOffer();
+  //       socket.emit("call-user", { emailId, offer });
+  //       console.log("Sent call offer to:", emailId, offer);
+  //     } catch (err) {
+  //       console.error("Error creating offer:", err);
+  //     }
+  //   },
+  //   [createOffer, socket]
+  // );
+
   const newUserJoined = useCallback(
     async (data) => {
       const { emailId } = data;
-      console.log("🟢 New user joined:", emailId);
-
+      console.log("New user joined:", emailId);
       try {
-        // Create WebRTC offer
-        const offer = await createOffer();
-
-        // Emit event via socket
-        socket.emit("call-user", { emailId, offer });
-        console.log("📤 Sent call offer to:", emailId);
+        // Add a small delay so the new user finishes connecting
+        setTimeout(async () => {
+          const offer = await createOffer();
+          socket.emit("call-user", { emailId, offer });
+          console.log("Sent call offer to:", emailId, offer);
+        }, 1000); // ⏱ 1-second delay
       } catch (err) {
-        console.error("❌ Error creating offer:", err);
+        console.error("Error creating offer:", err);
       }
     },
     [createOffer, socket]
@@ -32,35 +47,20 @@ const RoomPage = () => {
   const handleIncomingCall = useCallback(
     async (data) => {
       const { from, offer } = data;
-      console.log("helooooo");
-      console.log("📞 Incoming call from:", from, offer);
-
-      try {
-        // You’ll handle the answer creation here soon
-        // Example (once implemented):
-        // await peer.setRemoteDescription(offer);
-        // const answer = await peer.createAnswer();
-        // await peer.setLocalDescription(answer);
-        // socket.emit("call-accepted", { emailId: from, answer });
-      } catch (err) {
-        console.error("❌ Error handling incoming call:", err);
-      }
+      console.log("Incoming call from:", from, offer);
     },
     [peer, socket]
   );
 
-  // Setup socket event listeners
   useEffect(() => {
-    if (!socket) return;
-
     socket.on("user-joined", newUserJoined);
     socket.on("incoming-call", handleIncomingCall);
 
-    // ✅ Cleanup to prevent duplicate event listeners
-    return () => {
-      socket.off("user-joined", newUserJoined);
-      socket.off("incoming-call", handleIncomingCall);
-    };
+    // return () => {
+    //   socket.off("joined-room");
+    //   socket.off("incoming-call", handleIncomingCall);
+    //   socket.off("user-joined", newUserJoined);
+    // };
   }, [socket, newUserJoined, handleIncomingCall]);
 
   return <div>hello this is Room</div>;

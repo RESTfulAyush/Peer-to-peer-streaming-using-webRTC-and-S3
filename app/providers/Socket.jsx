@@ -1,12 +1,12 @@
 "use client";
 
+import { useEffect } from "react";
+
 import React, { createContext, useMemo, useContext } from "react";
 import { io } from "socket.io-client";
 
-// 1️⃣ Create context
 const SocketContext = createContext({ socket: null });
 
-// 2️⃣ Provider component
 export const SocketProvider = ({ children }) => {
   const socket = useMemo(() => {
     return io("http://localhost:8000", {
@@ -20,7 +20,7 @@ export const SocketProvider = ({ children }) => {
     </SocketContext.Provider>
   );
 };
- 
+
 export const useSocket = () => {
-    return useContext(SocketContext)
+  return useContext(SocketContext);
 };

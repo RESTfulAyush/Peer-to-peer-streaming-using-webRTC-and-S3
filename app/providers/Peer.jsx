@@ -8,7 +8,14 @@ const PeerContext = createContext(null);
 export const PeerProvider = (props) => {
   const peer = useMemo(() => {
   if (typeof window === "undefined") return null; // prevent SSR crash
-  return new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  return new RTCPeerConnection({ 
+    iceServers: [{ 
+      urls: [
+        "stun:stun.l.google.com:19302",
+        "stun:global.stun.twilio.com:3478"
+      ] 
+    }] 
+  });
 }, []);
 
 
@@ -17,6 +24,7 @@ const createOffer = async ()=> {
     await peer.setLocalDescription(offer);
     return offer
   };
+
   return (
     <PeerContext.Provider value={{ peer, createOffer }}>
       {props.children}
@@ -25,6 +33,5 @@ const createOffer = async ()=> {
 };
  
 export const usePeer = () => {
-  const context = useContext(PeerContext);
-  return context;
+  return useContext(PeerContext);
 };
