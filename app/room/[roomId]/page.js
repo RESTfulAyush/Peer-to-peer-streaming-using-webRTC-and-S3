@@ -3,39 +3,19 @@
 import React, { useCallback, useEffect } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
-// import { useParams } from "next/navigation";
 
 const RoomPage = () => {
   const { socket } = useSocket();
-  const { peer, createOffer } = usePeer();
-  // const params = useParams();
-  // const roomId = params.roomId;
-
-  // const newUserJoined = useCallback(
-  //   async (data) => {
-  //     const { emailId } = data;
-  //     try {
-  //       const offer = await createOffer();
-  //       socket.emit("call-user", { emailId, offer });
-  //       console.log("Sent call offer to:", emailId, offer);
-  //     } catch (err) {
-  //       console.error("Error creating offer:", err);
-  //     }
-  //   },
-  //   [createOffer, socket]
-  // );
+  const { peer, createOffer, createAnswer, setRemoteAns } = usePeer();
 
   const newUserJoined = useCallback(
     async (data) => {
       const { emailId } = data;
       console.log("New user joined:", emailId);
       try {
-        // Add a small delay so the new user finishes connecting
-        setTimeout(async () => {
-          const offer = await createOffer();
-          socket.emit("call-user", { emailId, offer });
-          console.log("Sent call offer to:", emailId, offer);
-        }, 1000); // ⏱ 1-second delay
+        const offer = await createOffer();
+        socket.emit("call-user", { emailId, offer });
+        console.log("Sent call offer to:", emailId, offer);
       } catch (err) {
         console.error("Error creating offer:", err);
       }
@@ -43,24 +23,36 @@ const RoomPage = () => {
     [createOffer, socket]
   );
 
-  // Handle incoming call
   const handleIncomingCall = useCallback(
     async (data) => {
       const { from, offer } = data;
       console.log("Incoming call from:", from, offer);
+      const ans = await createAnswer(offer);
+      socket.emit("call-accepted", { emailId: from, ans });
     },
-    [peer, socket]
+    [peer, socket, createAnswer]
+  );
+
+  const handleCallAccepted = useCallback(
+    async (data) => {
+      const { ans } = data;
+      console.log("call accpeted", ans);
+      await setRemoteAns(ans);
+    },
+    [setRemoteAns]
   );
 
   useEffect(() => {
     socket.on("user-joined", newUserJoined);
     socket.on("incoming-call", handleIncomingCall);
+    socket.emit("ready-to-receive");
+    socket.on("call-accepted", handleCallAccepted);
 
-    // return () => {
-    //   socket.off("joined-room");
-    //   socket.off("incoming-call", handleIncomingCall);
-    //   socket.off("user-joined", newUserJoined);
-    // };
+    return () => {
+      socket.off("user-joined", newUserJoined);
+      socket.off("incoming-call", handleIncomingCall);
+      socket.off("call-accepted", handleCallAccepted);
+    };
   }, [socket, newUserJoined, handleIncomingCall]);
 
   return <div>hello this is Room</div>;

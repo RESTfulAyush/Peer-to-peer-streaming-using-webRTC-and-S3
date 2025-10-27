@@ -1,10 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-// import { SocketProvider } from "./providers/Socket";
+import { useCallback, useEffect, useState } from "react";
 import { useSocket } from "./providers/Socket";
-import { Router } from "next/router";
 
 export default function HomePage() {
   const router = useRouter();
@@ -12,13 +10,19 @@ export default function HomePage() {
   const [email, setEmail] = useState("");
   const [roomId, setRoomId] = useState();
 
-  const handleRoomJoined = ({ roomId }) => {
-    router.push(`/room/${roomId}`);
-  };
+  const handleRoomJoined = useCallback(
+    ({ roomId }) => {
+      router.push(`/room/${roomId}`);
+    },
+    [router]
+  );
 
   useEffect(() => {
     socket.on("joined-room", handleRoomJoined);
-  }, [socket]);
+    return () => {
+      socket.off("joined-room", handleRoomJoined);
+    };
+  }, [socket, handleRoomJoined]);
 
   const handleJoinRoom = () => {
     socket.emit("join-room", { emailId: email, roomId: roomId });
