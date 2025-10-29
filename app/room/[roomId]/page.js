@@ -2,16 +2,18 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
+import { Mic, Video, PhoneOff } from "lucide-react";
 
 const RoomPage = () => {
   const { socket } = useSocket();
   const { peer, createOffer, createAnswer, setRemoteAns } = usePeer();
-  const [myStream, setMyStream] = useState(null);
-  const [remoteStream, setRemoteStream] = useState(null);
   const myVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteEmailRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
+  const [isMicOn, setIsMicOn] = useState(true);
+  const [myStream, setMyStream] = useState(null);
+  const [isVideoOn, setIsVideoOn] = useState(true);
 
   const getUserMediaStream = useCallback(async () => {
     try {
@@ -19,19 +21,22 @@ const RoomPage = () => {
         audio: true,
         video: true,
       });
-      setMyStream(stream);
       if (myVideoRef.current) {
         myVideoRef.current.srcObject = stream;
         console.log("my stream:", stream);
       }
+
+      // Save stream for later access
+      setMyStream(stream);
+
       // Add local tracks to peer connection
       stream.getTracks().forEach((track) => {
         console.log("Adding track:", track.kind);
         peer.addTrack(track, stream);
       });
 
-      // Signal that we're ready to receive messages
       setIsReady(true);
+      console.log("mic on:", isMicOn);
       socket.emit("ready-to-receive");
     } catch (error) {
       console.error("Error getting user media:", error);
@@ -41,7 +46,7 @@ const RoomPage = () => {
   const newUserJoined = useCallback(
     async ({ emailId }) => {
       console.log("New user joined:", emailId);
-      remoteEmailRef.current = emailId; // ✅ Store remote user's email
+      remoteEmailRef.current = emailId;
 
       const offer = await createOffer();
       console.log("Sending offer to:", emailId);
@@ -53,7 +58,7 @@ const RoomPage = () => {
   const handleIncomingCall = useCallback(
     async ({ from, offer }) => {
       console.log("Incoming call from:", from);
-      remoteEmailRef.current = from; // ✅ Store remote user's email
+      remoteEmailRef.current = from;
 
       const ans = await createAnswer(offer);
       console.log("Sending answer to:", from);
@@ -70,19 +75,16 @@ const RoomPage = () => {
     [setRemoteAns]
   );
 
-  // ✅ Handle remote stream
   useEffect(() => {
     peer.ontrack = (event) => {
       console.log("Received remote track:", event.track.kind);
       const [stream] = event.streams;
       console.log("Remote stream received:", stream);
-      setRemoteStream(stream);
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream;
       }
     };
 
-    // Monitor connection state
     peer.onconnectionstatechange = () => {
       console.log("Connection state:", peer.connectionState);
     };
@@ -92,7 +94,6 @@ const RoomPage = () => {
     };
   }, [peer]);
 
-  // ✅ ICE candidate exchange
   useEffect(() => {
     peer.onicecandidate = (event) => {
       if (event.candidate) {
@@ -125,7 +126,7 @@ const RoomPage = () => {
 
   useEffect(() => {
     socket.on("joined-room", ({ roomId }) => {
-      console.log("✅ Successfully joined room:", roomId);
+      console.log("Successfully joined room:", roomId);
     });
 
     return () => {
@@ -145,20 +146,139 @@ const RoomPage = () => {
     };
   }, [socket, newUserJoined, handleIncomingCall, handleCallAccepted]);
 
+  // const handleMic = () => {
+  //   if (!myStream) return;
+
+  //   const audioTracks = myStream.getAudioTracks();
+  //   if (audioTracks.length === 0) {
+  //     console.warn("No audio tracks found");
+  //     return;
+  //   }
+
+  //   const newMicState = !isMicOn;
+  //   audioTracks.forEach((track) => (track.enabled = newMicState));
+  //   setIsMicOn(newMicState);
+
+  //   console.log(`Microphone ${newMicState ? "unmuted" : "muted"}`);
+  // };
+
+  const handleMic = () => {
+    if (!peer) return;
+
+    // Find all audio senders (tracks being sent to remote peer)
+    const audioSenders = peer
+      .getSenders()
+      .filter((sender) => sender.track && sender.track.kind === "audio");
+
+    if (audioSenders.length === 0) {
+      console.warn("No audio senders found");
+      return;
+    }
+
+    const newMicState = !isMicOn;
+    setIsMicOn(newMicState);
+
+    // Toggle both sender and local stream track (for UI consistency)
+    audioSenders.forEach((sender) => {
+      sender.track.enabled = newMicState;
+    });
+
+    if (myStream) {
+      myStream.getAudioTracks().forEach((track) => {
+        track.enabled = newMicState;
+      });
+    }
+
+    console.log(`Microphone ${newMicState ? "unmuted" : "muted"}`);
+  };
+
+  const handleVideo = () => {
+    if (!peer) return;
+
+    // Find all video senders
+    const videoSenders = peer
+      .getSenders()
+      .filter((sender) => sender.track && sender.track.kind === "video");
+
+    if (videoSenders.length === 0) {
+      console.warn("No video senders found");
+      return;
+    }
+
+    const newVideoState = !isVideoOn;
+    setIsVideoOn(newVideoState);
+
+    // Toggle video tracks being sent
+    videoSenders.forEach((sender) => {
+      sender.track.enabled = newVideoState;
+    });
+
+    // Also toggle local preview video
+    if (myStream) {
+      myStream.getVideoTracks().forEach((track) => {
+        track.enabled = newVideoState;
+      });
+    }
+
+    console.log(`Camera ${newVideoState ? "turned on" : "turned off"}`);
+  };
+
   return (
-    <div>
-      <h1>This is a Room</h1>
-      <div>Status: {isReady ? "Ready" : "Setting up..."}</div>
-      <div>Remote Email: {remoteEmailRef.current || "Waiting for peer..."}</div>
-      <div style={{ display: "flex", gap: "10px" }}>
-        <div>
-          <h3>My Video</h3>
-          <video ref={myVideoRef} autoPlay playsInline muted width={300} />
+    <div className="relative w-full h-screen bg-gray-900">
+      {/* Remote Video (Full Screen) */}
+      <video
+        ref={remoteVideoRef}
+        autoPlay
+        playsInline
+        className="w-full h-full object-cover"
+      />
+
+      {/* My Video (Picture-in-Picture) */}
+      <div className="absolute top-4 right-4 w-48 h-36 bg-gray-800 rounded-lg overflow-hidden shadow-2xl border-2 border-gray-700">
+        <video
+          ref={myVideoRef}
+          autoPlay
+          playsInline
+          className="w-full h-full object-cover"
+        />
+      </div>
+
+      {/* Status Bar (Top) */}
+      <div className="absolute top-4 left-4 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
+        <div className="flex items-center gap-2 text-white text-sm">
+          <div
+            className={`w-2 h-2 rounded-full ${
+              isReady ? "bg-green-500" : "bg-yellow-500"
+            }`}
+          />
+          <span>{isReady ? "Connected" : "Setting up..."}</span>
         </div>
-        <div>
-          <h3>Remote Video</h3>
-          <video ref={remoteVideoRef} autoPlay playsInline width={300} />
-        </div>
+        {remoteEmailRef.current && (
+          <div className="text-white text-xs mt-1">
+            {remoteEmailRef.current}
+          </div>
+        )}
+      </div>
+
+      {/* Control Bar (Bottom) */}
+      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-70 px-6 py-4 rounded-full flex items-center gap-4">
+        <button
+          onClick={handleMic}
+          className={`w-12 h-12 ${
+            isMicOn
+              ? "bg-gray-700 hover:bg-gray-600"
+              : "bg-red-700 hover:bg-red-800"
+          } rounded-full flex items-center justify-center text-white transition`}
+        >
+          <Mic className="w-6 h-6" />
+        </button>
+
+        <button className="w-12 h-12 bg-gray-700 hover:bg-gray-600 rounded-full flex items-center justify-center text-white transition">
+          <Video className="w-6 h-6" />
+        </button>
+        <button className="w-12 h-12 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center text-white transition">
+          <PhoneOff className="w-6 h-6" />
+        </button>
       </div>
     </div>
   );
