@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
 import { Mic, Video, PhoneOff } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 const RoomPage = () => {
   const { socket } = useSocket();
@@ -14,6 +15,7 @@ const RoomPage = () => {
   const [isMicOn, setIsMicOn] = useState(true);
   const [myStream, setMyStream] = useState(null);
   const [isVideoOn, setIsVideoOn] = useState(true);
+  const router = useRouter();
 
   const getUserMediaStream = useCallback(async () => {
     try {
@@ -26,7 +28,6 @@ const RoomPage = () => {
         console.log("my stream:", stream);
       }
 
-      // Save stream for later access
       setMyStream(stream);
 
       // Add local tracks to peer connection
@@ -146,22 +147,6 @@ const RoomPage = () => {
     };
   }, [socket, newUserJoined, handleIncomingCall, handleCallAccepted]);
 
-  // const handleMic = () => {
-  //   if (!myStream) return;
-
-  //   const audioTracks = myStream.getAudioTracks();
-  //   if (audioTracks.length === 0) {
-  //     console.warn("No audio tracks found");
-  //     return;
-  //   }
-
-  //   const newMicState = !isMicOn;
-  //   audioTracks.forEach((track) => (track.enabled = newMicState));
-  //   setIsMicOn(newMicState);
-
-  //   console.log(`Microphone ${newMicState ? "unmuted" : "muted"}`);
-  // };
-
   const handleMic = () => {
     if (!peer) return;
 
@@ -195,7 +180,6 @@ const RoomPage = () => {
   const handleVideo = () => {
     if (!peer) return;
 
-    // Find all video senders
     const videoSenders = peer
       .getSenders()
       .filter((sender) => sender.track && sender.track.kind === "video");
@@ -221,6 +205,37 @@ const RoomPage = () => {
     }
 
     console.log(`Camera ${newVideoState ? "turned on" : "turned off"}`);
+  };
+
+  const handleEndCall = () => {
+    if (myStream) {
+      myStream.getTracks().forEach((track) => {
+        track.stop();
+      });
+      setMyStream(null);
+    }
+
+    if (peer) {
+      peer.getSenders().forEach((sender) => {
+        try {
+          sender.track?.stop();
+        } catch (err) {}
+      });
+      peer.close();
+      console.log("Peer connection closed");
+    }
+
+    if (remoteEmailRef.current) {
+      socket.emit("end-call", { to: remoteEmailRef.current });
+      console.log("End call signal sent to:", remoteEmailRef.current);
+    }
+
+    if (myVideoRef.current) myVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    remoteEmailRef.current = null;
+    setIsReady(false);
+    router.push("/");
+    console.log("Call ended successfully");
   };
 
   return (
@@ -266,17 +281,27 @@ const RoomPage = () => {
           onClick={handleMic}
           className={`w-12 h-12 ${
             isMicOn
-              ? "bg-gray-700 hover:bg-gray-600"
-              : "bg-red-700 hover:bg-red-800"
+              ? "bg-red-700 hover:bg-red-800"
+              : "bg-gray-700 hover:bg-gray-600"
           } rounded-full flex items-center justify-center text-white transition`}
         >
           <Mic className="w-6 h-6" />
         </button>
 
-        <button className="w-12 h-12 bg-gray-700 hover:bg-gray-600 rounded-full flex items-center justify-center text-white transition">
+        <button
+          onClick={handleVideo}
+          className={`w-12 h-12 ${
+            isVideoOn
+              ? "bg-red-700 hover:bg-red-800"
+              : "bg-gray-700 hover:bg-gray-600"
+          } rounded-full flex items-center justify-center text-white transition`}
+        >
           <Video className="w-6 h-6" />
         </button>
-        <button className="w-12 h-12 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center text-white transition">
+        <button
+          onClick={handleEndCall}
+          className="w-12 h-12 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center text-white transition"
+        >
           <PhoneOff className="w-6 h-6" />
         </button>
       </div>
