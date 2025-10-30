@@ -254,7 +254,8 @@ const RoomPage = () => {
           ref={myVideoRef}
           autoPlay
           playsInline
-          className="w-full h-full object-cover"
+          muted
+          className="w-full h-full object-cover transform -scale-x-100"
         />
       </div>
 
