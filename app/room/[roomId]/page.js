@@ -2,8 +2,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
-import { Mic, Video, PhoneOff } from "lucide-react";
+import { Mic, Video, PhoneOff, MoreHorizontal } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+
+import RoomInfoCard from "@/app/components/card/page";
 
 const RoomPage = () => {
   const { socket } = useSocket();
@@ -16,6 +19,9 @@ const RoomPage = () => {
   const [myStream, setMyStream] = useState(null);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const router = useRouter();
+  const [showRoomCard, setShowRoomCard] = useState(true);
+  const params = useParams();
+  const roomId = params.roomId;
 
   const getUserMediaStream = useCallback(async () => {
     try {
@@ -126,9 +132,7 @@ const RoomPage = () => {
   }, [getUserMediaStream]);
 
   useEffect(() => {
-    socket.on("joined-room", ({ roomId }) => {
-      console.log("Successfully joined room:", roomId);
-    });
+    socket.on("joined-room", ({ roomId }) => {});
 
     return () => {
       socket.off("joined-room");
@@ -259,6 +263,10 @@ const RoomPage = () => {
         />
       </div>
 
+      {showRoomCard && (
+        <RoomInfoCard roomId={roomId} onClose={() => setShowRoomCard(false)} />
+      )}
+
       {/* Status Bar (Top) */}
       <div className="absolute top-4 left-4 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
         <div className="flex items-center gap-2 text-white text-sm">
@@ -298,6 +306,15 @@ const RoomPage = () => {
           } rounded-full flex items-center justify-center text-white transition`}
         >
           <Video className="w-6 h-6" />
+        </button>
+        <button
+          onClick={() => setShowRoomCard(!showRoomCard)}
+          className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition hover:bg-gray-600 ${
+            showRoomCard ? "bg-violet-600" : "bg-gray-700"
+          }`}
+          title="Meeting Details"
+        >
+          <MoreHorizontal className="w-5 h-5" />
         </button>
         <button
           onClick={handleEndCall}
