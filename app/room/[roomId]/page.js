@@ -2,9 +2,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
-import { Mic, Video, PhoneOff, MoreHorizontal, CircleDot } from "lucide-react";
+import {
+  Mic,
+  Video,
+  PhoneOff,
+  MoreHorizontal,
+  CircleDot,
+  Database,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useParams } from "next/navigation";
+import { useLocalRecorder } from "@/hooks/useLocalRecorder";
 
 import RoomInfoCard from "@/app/components/card/page";
 
@@ -23,6 +31,31 @@ const RoomPage = () => {
   const params = useParams();
   const roomId = params.roomId;
   const [recording, setRecording] = useState(false);
+
+  const {
+    startRecording,
+    stopRecording,
+    bufferSize,
+    isRecording,
+    packageNextPart,
+  } = useLocalRecorder(myStream, roomId);
+
+  useEffect(() => {
+    let interval;
+    if (isRecording) {
+      interval = setInterval(async () => {
+        const part = await packageNextPart();
+        if (part) {
+          console.log(
+            ">>> Phase 2 Trigger: Uploading 6MB chunk to S3...",
+            part
+          );
+          // fetch('/api/upload-url', ...)
+        }
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, packageNextPart]);
 
   const getUserMediaStream = useCallback(async () => {
     try {
@@ -152,6 +185,25 @@ const RoomPage = () => {
     };
   }, [socket, newUserJoined, handleIncomingCall, handleCallAccepted]);
 
+  useEffect(() => {
+    // Listen for the "Start" signal from the other peer
+    socket.on("start-recording-trigger", ({ startTime }) => {
+      console.log("Received remote start signal. Starting local recording...");
+      startRecording(startTime);
+    });
+
+    // Listen for the "Stop" signal
+    socket.on("stop-recording-trigger", () => {
+      console.log("Received remote stop signal.");
+      stopRecording();
+    });
+
+    return () => {
+      socket.off("start-recording-trigger");
+      socket.off("stop-recording-trigger");
+    };
+  }, [socket, startRecording, stopRecording]);
+
   const handleMic = () => {
     if (!peer) return;
 
@@ -212,41 +264,65 @@ const RoomPage = () => {
     console.log(`Camera ${newVideoState ? "turned on" : "turned off"}`);
   };
 
+  // const handleEndCall = () => {
+  //   if (myStream) {
+  //     myStream.getTracks().forEach((track) => {
+  //       track.stop();
+  //     });
+  //     setMyStream(null);
+  //   }
+
+  //   if (peer) {
+  //     peer.getSenders().forEach((sender) => {
+  //       try {
+  //         sender.track?.stop();
+  //       } catch (err) {}
+  //     });
+  //     peer.close();
+  //     console.log("Peer connection closed");
+  //   }
+
+  //   if (remoteEmailRef.current) {
+  //     socket.emit("end-call", { to: remoteEmailRef.current });
+  //     console.log("End call signal sent to:", remoteEmailRef.current);
+  //   }
+
+  //   if (myVideoRef.current) myVideoRef.current.srcObject = null;
+  //   if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+  //   remoteEmailRef.current = null;
+  //   setIsReady(false);
+  //   router.push("/");
+  //   console.log("Call ended successfully");
+  // };
+
   const handleEndCall = () => {
-    if (myStream) {
-      myStream.getTracks().forEach((track) => {
-        track.stop();
-      });
-      setMyStream(null);
-    }
-
+    if (isRecording) stopRecording(); // Stop recording if user ends call
+    if (myStream) myStream.getTracks().forEach((t) => t.stop());
     if (peer) {
-      peer.getSenders().forEach((sender) => {
-        try {
-          sender.track?.stop();
-        } catch (err) {}
-      });
+      peer.getSenders().forEach((s) => s.track?.stop());
       peer.close();
-      console.log("Peer connection closed");
     }
-
-    if (remoteEmailRef.current) {
+    if (remoteEmailRef.current)
       socket.emit("end-call", { to: remoteEmailRef.current });
-      console.log("End call signal sent to:", remoteEmailRef.current);
-    }
-
-    if (myVideoRef.current) myVideoRef.current.srcObject = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    remoteEmailRef.current = null;
-    setIsReady(false);
     router.push("/");
-    console.log("Call ended successfully");
   };
 
   const handleRecording = () => {
-    setRecording(!recording);
-    if (recording) console.log("recording started");
-    else console.log("recording stopped");
+    if (!isRecording) {
+      const serverTimestamp = Date.now(); // Ideally, get this from server sync
+
+      // 1. Start my own local recorder
+      startRecording(serverTimestamp);
+
+      // 2. Tell the other person to start theirs
+      socket.emit("start-recording-trigger", {
+        roomId,
+        startTime: serverTimestamp,
+      });
+    } else {
+      stopRecording();
+      socket.emit("stop-recording-trigger", { roomId });
+    }
   };
 
   return (
@@ -321,18 +397,13 @@ const RoomPage = () => {
         <button
           onClick={handleRecording}
           className={`w-12 h-12 ${
-            recording
-              ? "bg-red-600 animate-pulse"
-              : "bg-gray-700 hover:bg-gray-600"
+            recording ? "bg-red-600 animate-pulse" : "bg-gray-700"
           } rounded-full flex items-center justify-center text-white transition relative`}
           title={recording ? "Stop Recording" : "Start Recording"}
         >
-          {/* Lucide icon 'CircleDot' or 'Circle' works well here */}
           <CircleDot
             className={`w-6 h-6 ${recording ? "fill-white" : "text-red-500"}`}
           />
-
-          {/* Optional: Tiny red indicator dot */}
           {recording && (
             <span className="absolute top-2 right-2 flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>

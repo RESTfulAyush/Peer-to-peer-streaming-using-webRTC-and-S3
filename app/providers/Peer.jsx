@@ -44,7 +44,7 @@ export const PeerProvider = (props) => {
 
   const createAnswer = async (offer) => {
     try {
-      // ✅ Wrap in RTCSessionDescription
+      // Wrap in RTCSessionDescription
       await peer.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
@@ -58,7 +58,7 @@ export const PeerProvider = (props) => {
 
   const setRemoteAns = async (ans) => {
     try {
-      // ✅ Wrap in RTCSessionDescription
+      // Wrap in RTCSessionDescription
       await peer.setRemoteDescription(new RTCSessionDescription(ans));
       console.log("Remote answer set successfully");
     } catch (error) {
