@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
-import { Mic, Video, PhoneOff, MoreHorizontal } from "lucide-react";
+import { Mic, Video, PhoneOff, MoreHorizontal, CircleDot } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useParams } from "next/navigation";
 
@@ -22,6 +22,7 @@ const RoomPage = () => {
   const [showRoomCard, setShowRoomCard] = useState(true);
   const params = useParams();
   const roomId = params.roomId;
+  const [recording, setRecording] = useState(false);
 
   const getUserMediaStream = useCallback(async () => {
     try {
@@ -242,6 +243,12 @@ const RoomPage = () => {
     console.log("Call ended successfully");
   };
 
+  const handleRecording = () => {
+    setRecording(!recording);
+    if (recording) console.log("recording started");
+    else console.log("recording stopped");
+  };
+
   return (
     <div className="relative w-full h-screen bg-gray-900">
       {/* Remote Video (Full Screen) */}
@@ -286,6 +293,7 @@ const RoomPage = () => {
 
       {/* Control Bar (Bottom) */}
       <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-70 px-6 py-4 rounded-full flex items-center gap-4">
+        {/* Mic Button */}
         <button
           onClick={handleMic}
           className={`w-12 h-12 ${
@@ -297,6 +305,7 @@ const RoomPage = () => {
           <Mic className="w-6 h-6" />
         </button>
 
+        {/* Video Button */}
         <button
           onClick={handleVideo}
           className={`w-12 h-12 ${
@@ -307,6 +316,32 @@ const RoomPage = () => {
         >
           <Video className="w-6 h-6" />
         </button>
+
+        {/* NEW: Record Button */}
+        <button
+          onClick={handleRecording}
+          className={`w-12 h-12 ${
+            recording
+              ? "bg-red-600 animate-pulse"
+              : "bg-gray-700 hover:bg-gray-600"
+          } rounded-full flex items-center justify-center text-white transition relative`}
+          title={recording ? "Stop Recording" : "Start Recording"}
+        >
+          {/* Lucide icon 'CircleDot' or 'Circle' works well here */}
+          <CircleDot
+            className={`w-6 h-6 ${recording ? "fill-white" : "text-red-500"}`}
+          />
+
+          {/* Optional: Tiny red indicator dot */}
+          {recording && (
+            <span className="absolute top-2 right-2 flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+            </span>
+          )}
+        </button>
+
+        {/* Meeting Details Button */}
         <button
           onClick={() => setShowRoomCard(!showRoomCard)}
           className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition hover:bg-gray-600 ${
@@ -316,6 +351,8 @@ const RoomPage = () => {
         >
           <MoreHorizontal className="w-5 h-5" />
         </button>
+
+        {/* End Call Button */}
         <button
           onClick={handleEndCall}
           className="w-12 h-12 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center text-white transition"
