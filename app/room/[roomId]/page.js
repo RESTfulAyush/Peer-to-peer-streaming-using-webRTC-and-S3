@@ -23,9 +23,9 @@ const RoomPage = () => {
   const [showRoomCard, setShowRoomCard] = useState(true);
   const params = useParams();
   const roomId = params.roomId;
-  const [recording, setRecording] = useState(false);
-  const [uploadConfig, setUploadConfig] = useState(null); // stores { uploadId, key }
-  const partsList = useRef([]); // stores { ETag, PartNumber }
+  // const [recording, setRecording] = useState(false);
+  const [uploadConfig, setUploadConfig] = useState(null);
+  const partsList = useRef([]);
   const partNumberCounter = useRef(1);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -86,32 +86,15 @@ const RoomPage = () => {
             }
           } catch (err) {
             console.error("Chunk upload failed:", err);
-            // In a real app, you'd put the chunk back in a retry queue here
+            //put the chunk back in a retry queue here (later)
           } finally {
             setIsUploading(false);
           }
         }
-      }, 10000); // Check every 10 seconds
+      }, 10000);
     }
     return () => clearInterval(interval);
   }, [isRecording, uploadConfig, packageNextPart]);
-
-  useEffect(() => {
-    let interval;
-    if (isRecording) {
-      interval = setInterval(async () => {
-        const part = await packageNextPart();
-        if (part) {
-          console.log(
-            ">>> Phase 2 Trigger: Uploading 6MB chunk to S3...",
-            part
-          );
-          // fetch('/api/upload-url', ...)
-        }
-      }, 5000);
-    }
-    return () => clearInterval(interval);
-  }, [isRecording, packageNextPart]);
 
   const getUserMediaStream = useCallback(async () => {
     try {
@@ -352,7 +335,7 @@ const RoomPage = () => {
   // };
 
   const handleEndCall = () => {
-    if (isRecording) stopRecording(); // Stop recording if user ends call
+    if (isRecording) stopRecording();
     if (myStream) myStream.getTracks().forEach((t) => t.stop());
     if (peer) {
       peer.getSenders().forEach((s) => s.track?.stop());
@@ -367,7 +350,7 @@ const RoomPage = () => {
     if (!isRecording) {
       try {
         const serverTimestamp = Date.now();
-        const userId = socket.id; // Use socket ID or Email as identifier
+        const userId = socket.id;
 
         // 1. Handshake with S3 (Initiate)
         const res = await fetch("/api/recording/initiate", {
@@ -399,16 +382,20 @@ const RoomPage = () => {
   };
 
   const handleStopAndFinalize = async () => {
-    // 1. Stop local media recorder
+    // 1. Stop the recorder (this stops the camera stream into IndexedDB)
     stopRecording();
     socket.emit("stop-recording-trigger", { roomId });
 
-    console.log("Finalizing recording... uploading last chunks");
+    console.log("Finalizing recording... packaging last chunks");
 
-    // 2. Package any remaining data in IndexedDB (The "Final Part")
-    const finalBlob = await packageNextPart();
+    // 2. MANUALLY get the last part from the hook
+    // We pass 'true' because this is the end of the call (size doesn't matter)
+    const finalBlob = await packageNextPart(true);
+
     if (finalBlob && uploadConfig) {
+      // 3. Upload this last piece to S3
       const currentPartNumber = partNumberCounter.current;
+
       const urlRes = await fetch("/api/recording/get-url", {
         method: "POST",
         body: JSON.stringify({
@@ -418,24 +405,27 @@ const RoomPage = () => {
         }),
       });
       const { url } = await urlRes.json();
+
       const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
       const etag = s3Res.headers.get("ETag");
+
       if (etag) {
         partsList.current.push({ ETag: etag, PartNumber: currentPartNumber });
       }
     }
 
-    // 3. Tell Backend to Complete Multipart Upload
-    if (uploadConfig) {
+    if (uploadConfig && partsList.current.length > 0) {
       await fetch("/api/recording/complete", {
         method: "POST",
         body: JSON.stringify({
           uploadId: uploadConfig.uploadId,
           key: uploadConfig.key,
           parts: partsList.current.sort((a, b) => a.PartNumber - b.PartNumber),
+          roomId: roomId,
+          userId: socket.id,
         }),
       });
-      console.log("Recording complete and merged on S3!");
+      console.log("S3 Assembly Complete!");
       setUploadConfig(null);
     }
   };
@@ -512,14 +502,14 @@ const RoomPage = () => {
         <button
           onClick={handleRecording}
           className={`w-12 h-12 ${
-            recording ? "bg-red-600 animate-pulse" : "bg-gray-700"
+            isRecording ? "bg-red-600 animate-pulse" : "bg-gray-700"
           } rounded-full flex items-center justify-center text-white transition relative`}
-          title={recording ? "Stop Recording" : "Start Recording"}
+          title={isRecording ? "Stop Recording" : "Start Recording"}
         >
           <CircleDot
-            className={`w-6 h-6 ${recording ? "fill-white" : "text-red-500"}`}
+            className={`w-6 h-6 ${isRecording ? "fill-white" : "text-red-500"}`}
           />
-          {recording && (
+          {isRecording && (
             <span className="absolute top-2 right-2 flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
