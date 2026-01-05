@@ -62,7 +62,7 @@ export const useLocalRecorder = (stream, meetingId) => {
   const startRecording = async (serverStartTime) => {
     if (!stream) return;
 
-    await recordingDb.clearAll(); // Clean start
+    await recordingDb.clearAll();
     setStartTime(serverStartTime);
 
     const options = { mimeType: "video/webm;codecs=vp8,opus" };
@@ -72,15 +72,6 @@ export const useLocalRecorder = (stream, meetingId) => {
       if (event.data && event.data.size > 0) {
         await recordingDb.addChunk(event.data);
         await updateBufferSize();
-      }
-    };
-
-    recorder.onstop = async () => {
-      // Final package call to get the last remaining data
-      const finalBlob = await packageNextPart(true);
-      if (finalBlob) {
-        // Here you would trigger your final S3 upload logic
-        console.log("Final blob ready for S3 Completion", finalBlob);
       }
     };
 
