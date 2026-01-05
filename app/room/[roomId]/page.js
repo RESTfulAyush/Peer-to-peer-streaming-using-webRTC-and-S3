@@ -2,14 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSocket } from "@/app/providers/Socket";
 import { usePeer } from "@/app/providers/Peer";
-import {
-  Mic,
-  Video,
-  PhoneOff,
-  MoreHorizontal,
-  CircleDot,
-  Database,
-} from "lucide-react";
+import { Mic, Video, PhoneOff, MoreHorizontal, CircleDot } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useParams } from "next/navigation";
 import { useLocalRecorder } from "@/hooks/useLocalRecorder";
@@ -31,6 +24,10 @@ const RoomPage = () => {
   const params = useParams();
   const roomId = params.roomId;
   const [recording, setRecording] = useState(false);
+  const [uploadConfig, setUploadConfig] = useState(null); // stores { uploadId, key }
+  const partsList = useRef([]); // stores { ETag, PartNumber }
+  const partNumberCounter = useRef(1);
+  const [isUploading, setIsUploading] = useState(false);
 
   const {
     startRecording,
@@ -39,6 +36,65 @@ const RoomPage = () => {
     isRecording,
     packageNextPart,
   } = useLocalRecorder(myStream, roomId);
+
+  useEffect(() => {
+    let interval;
+    if (isRecording && uploadConfig) {
+      interval = setInterval(async () => {
+        // 1. Check if we have a 6MB chunk ready in IndexedDB
+        const partBlob = await packageNextPart();
+
+        if (partBlob) {
+          try {
+            setIsUploading(true);
+            const currentPartNumber = partNumberCounter.current;
+            partNumberCounter.current += 1;
+
+            console.log(
+              `Uploading Part ${currentPartNumber} (${(
+                partBlob.size /
+                1024 /
+                1024
+              ).toFixed(2)} MB)...`
+            );
+
+            // 2. Get Presigned URL from Backend
+            const urlRes = await fetch("/api/recording/get-url", {
+              method: "POST",
+              body: JSON.stringify({
+                uploadId: uploadConfig.uploadId,
+                key: uploadConfig.key,
+                partNumber: currentPartNumber,
+              }),
+            });
+            const { url } = await urlRes.json();
+
+            // 3. Upload Blob directly to S3
+            const s3Res = await fetch(url, {
+              method: "PUT",
+              body: partBlob,
+            });
+
+            // 4. Capture ETag from Headers (CRITICAL)
+            const etag = s3Res.headers.get("ETag");
+            if (etag) {
+              partsList.current.push({
+                ETag: etag,
+                PartNumber: currentPartNumber,
+              });
+              console.log(`Part ${currentPartNumber} uploaded successfully.`);
+            }
+          } catch (err) {
+            console.error("Chunk upload failed:", err);
+            // In a real app, you'd put the chunk back in a retry queue here
+          } finally {
+            setIsUploading(false);
+          }
+        }
+      }, 10000); // Check every 10 seconds
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, uploadConfig, packageNextPart]);
 
   useEffect(() => {
     let interval;
@@ -307,21 +363,80 @@ const RoomPage = () => {
     router.push("/");
   };
 
-  const handleRecording = () => {
+  const handleRecording = async () => {
     if (!isRecording) {
-      const serverTimestamp = Date.now(); // Ideally, get this from server sync
+      try {
+        const serverTimestamp = Date.now();
+        const userId = socket.id; // Use socket ID or Email as identifier
 
-      // 1. Start my own local recorder
-      startRecording(serverTimestamp);
+        // 1. Handshake with S3 (Initiate)
+        const res = await fetch("/api/recording/initiate", {
+          method: "POST",
+          body: JSON.stringify({ meetingId: roomId, userId: userId }),
+        });
+        const data = await res.json();
 
-      // 2. Tell the other person to start theirs
-      socket.emit("start-recording-trigger", {
-        roomId,
-        startTime: serverTimestamp,
-      });
+        if (data.uploadId) {
+          setUploadConfig({ uploadId: data.uploadId, key: data.key });
+          partsList.current = [];
+          partNumberCounter.current = 1;
+
+          // 2. Start Local Recording (Phase 1 logic)
+          startRecording(serverTimestamp);
+
+          // 3. Sync with Peer
+          socket.emit("start-recording-trigger", {
+            roomId,
+            startTime: serverTimestamp,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to start recording:", err);
+      }
     } else {
-      stopRecording();
-      socket.emit("stop-recording-trigger", { roomId });
+      handleStopAndFinalize();
+    }
+  };
+
+  const handleStopAndFinalize = async () => {
+    // 1. Stop local media recorder
+    stopRecording();
+    socket.emit("stop-recording-trigger", { roomId });
+
+    console.log("Finalizing recording... uploading last chunks");
+
+    // 2. Package any remaining data in IndexedDB (The "Final Part")
+    const finalBlob = await packageNextPart();
+    if (finalBlob && uploadConfig) {
+      const currentPartNumber = partNumberCounter.current;
+      const urlRes = await fetch("/api/recording/get-url", {
+        method: "POST",
+        body: JSON.stringify({
+          uploadId: uploadConfig.uploadId,
+          key: uploadConfig.key,
+          partNumber: currentPartNumber,
+        }),
+      });
+      const { url } = await urlRes.json();
+      const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
+      const etag = s3Res.headers.get("ETag");
+      if (etag) {
+        partsList.current.push({ ETag: etag, PartNumber: currentPartNumber });
+      }
+    }
+
+    // 3. Tell Backend to Complete Multipart Upload
+    if (uploadConfig) {
+      await fetch("/api/recording/complete", {
+        method: "POST",
+        body: JSON.stringify({
+          uploadId: uploadConfig.uploadId,
+          key: uploadConfig.key,
+          parts: partsList.current.sort((a, b) => a.PartNumber - b.PartNumber),
+        }),
+      });
+      console.log("Recording complete and merged on S3!");
+      setUploadConfig(null);
     }
   };
 

@@ -9,8 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.835.0",
-    "@aws-sdk/s3-request-presigner": "^3.835.0",
+    "@aws-sdk/client-s3": "^3.958.0",
+    "@aws-sdk/s3-request-presigner": "^3.958.0",
     "framer-motion": "^12.23.24",
     "idb": "^8.0.3",
     "lucide-react": "^0.548.0",
