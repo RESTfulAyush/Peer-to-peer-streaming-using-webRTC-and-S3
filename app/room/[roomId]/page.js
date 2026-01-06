@@ -226,22 +226,51 @@ const RoomPage = () => {
 
   useEffect(() => {
     // Listen for the "Start" signal from the other peer
-    socket.on("start-recording-trigger", ({ startTime }) => {
-      console.log("Received remote start signal. Starting local recording...");
-      startRecording(startTime);
+    socket.on("start-recording-trigger", async ({ startTime }) => {
+      console.log(
+        "Received remote start signal. Initiating S3 + Local Recorder..."
+      );
+      // startRecording(startTime);
+      await initiateS3Recording(startTime);
     });
 
     // Listen for the "Stop" signal
-    socket.on("stop-recording-trigger", () => {
-      console.log("Received remote stop signal.");
+    socket.on("stop-recording-trigger", async () => {
+      console.log("Received remote stop signal. Finalizing S3 upload...");
       stopRecording();
+      await handleStopAndFinalize();
     });
 
     return () => {
       socket.off("start-recording-trigger");
       socket.off("stop-recording-trigger");
     };
-  }, [socket, startRecording, stopRecording]);
+  }, [socket, roomId, initiateS3Recording, handleStopAndFinalize]);
+
+  const initiateS3Recording = useCallback(
+    async (serverStartTime) => {
+      try {
+        const userId = socket.id;
+        const res = await fetch("/api/recording/initiate", {
+          method: "POST",
+          body: JSON.stringify({ meetingId: roomId, userId: userId }),
+        });
+        const data = await res.json();
+
+        if (data.uploadId) {
+          setUploadConfig({ uploadId: data.uploadId, key: data.key });
+          partsList.current = [];
+          partNumberCounter.current = 1;
+          startRecording(serverStartTime);
+          return true;
+        }
+      } catch (err) {
+        console.error("Failed to initiate S3 recording:", err);
+        return false;
+      }
+    },
+    [socket.id, roomId, startRecording]
+  );
 
   const handleMic = () => {
     if (!peer) return;
@@ -335,7 +364,9 @@ const RoomPage = () => {
   // };
 
   const handleEndCall = () => {
-    if (isRecording) stopRecording();
+    // If we are recording, we must finalize before leaving
+    if (isRecording) handleStopAndFinalize();
+
     if (myStream) myStream.getTracks().forEach((t) => t.stop());
     if (peer) {
       peer.getSenders().forEach((s) => s.track?.stop());
@@ -348,36 +379,19 @@ const RoomPage = () => {
 
   const handleRecording = async () => {
     if (!isRecording) {
-      try {
-        const serverTimestamp = Date.now();
-        const userId = socket.id;
-
-        // 1. Handshake with S3 (Initiate)
-        const res = await fetch("/api/recording/initiate", {
-          method: "POST",
-          body: JSON.stringify({ meetingId: roomId, userId: userId }),
+      const serverTimestamp = Date.now();
+      const success = await initiateS3Recording(serverTimestamp);
+      if (success) {
+        socket.emit("start-recording-trigger", {
+          roomId,
+          startTime: serverTimestamp,
         });
-        const data = await res.json();
-
-        if (data.uploadId) {
-          setUploadConfig({ uploadId: data.uploadId, key: data.key });
-          partsList.current = [];
-          partNumberCounter.current = 1;
-
-          // 2. Start Local Recording (Phase 1 logic)
-          startRecording(serverTimestamp);
-
-          // 3. Sync with Peer
-          socket.emit("start-recording-trigger", {
-            roomId,
-            startTime: serverTimestamp,
-          });
-        }
-      } catch (err) {
-        console.error("Failed to start recording:", err);
       }
     } else {
-      handleStopAndFinalize();
+      // We stop locally, which triggers the finalize logic
+      await handleStopAndFinalize();
+      // Tell peer to stop and finalize
+      socket.emit("stop-recording-trigger", { roomId });
     }
   };
 
