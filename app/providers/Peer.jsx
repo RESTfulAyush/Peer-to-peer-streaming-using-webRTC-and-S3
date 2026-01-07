@@ -34,7 +34,6 @@ export const PeerProvider = (props) => {
     try {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      console.log("Offer created:", offer);
       return offer;
     } catch (error) {
       console.error("Error creating offer:", error);
@@ -48,7 +47,6 @@ export const PeerProvider = (props) => {
       await peer.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
-      console.log("Answer created:", answer);
       return answer;
     } catch (error) {
       console.error("Error creating answer:", error);
@@ -60,7 +58,6 @@ export const PeerProvider = (props) => {
     try {
       // Wrap in RTCSessionDescription
       await peer.setRemoteDescription(new RTCSessionDescription(ans));
-      console.log("Remote answer set successfully");
     } catch (error) {
       console.error("Error setting remote answer:", error);
       throw error;
@@ -71,7 +68,6 @@ export const PeerProvider = (props) => {
   useEffect(() => {
     return () => {
       if (peer) {
-        console.log("Closing peer connection");
         peer.close();
       }
     };

@@ -63,19 +63,14 @@ export async function POST(req) {
       folderContents.Contents?.filter((file) => file.Key.endsWith(".json")) ||
       [];
 
-    console.log("status file 0:", statusFiles[0]);
-    console.log("status file 1:", statusFiles[1]);
     if (statusFiles.length === 2) {
-      console.log("Both users ready! Fetching dynamic keys");
       const user1Data = await getS3Json(statusFiles[0].Key);
       const user2Data = await getS3Json(statusFiles[1].Key);
 
       console.log(
         `Starting final merge for ${user1Data.videoKey} and ${user2Data.videoKey}`
       );
-
       await triggerMediaConvert(roomId, user1Data.videoKey, user2Data.videoKey);
-
       return NextResponse.json({
         success: true,
         message: "Merge triggered successfully",

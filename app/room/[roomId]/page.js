@@ -62,61 +62,10 @@ const RoomPage = () => {
     [socket.id, roomId, startRecording]
   );
 
-  // const handleStopAndFinalize = useCallback(async () => {
-  //   if (!uploadConfig) return;
-  //   // 1. Stop the recorder (this stops the camera stream into IndexedDB)
-  //   stopRecording();
-  //   socket.emit("stop-recording-trigger", { roomId });
-
-  //   console.log("Finalizing recording... packaging last chunks");
-
-  //   // 2. MANUALLY get the last part from the hook
-  //   // We pass 'true' because this is the end of the call (size doesn't matter)
-  //   const finalBlob = await packageNextPart(true);
-
-  //   if (finalBlob && uploadConfig) {
-  //     // 3. Upload this last piece to S3
-  //     const currentPartNumber = partNumberCounter.current;
-
-  //     const urlRes = await fetch("/api/recording/get-url", {
-  //       method: "POST",
-  //       body: JSON.stringify({
-  //         uploadId: uploadConfig.uploadId,
-  //         key: uploadConfig.key,
-  //         partNumber: currentPartNumber,
-  //       }),
-  //     });
-  //     const { url } = await urlRes.json();
-
-  //     const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
-  //     const etag = s3Res.headers.get("ETag");
-
-  //     if (etag) {
-  //       partsList.current.push({ ETag: etag, PartNumber: currentPartNumber });
-  //     }
-  //   }
-
-  //   if (uploadConfig && partsList.current.length > 0) {
-  //     await fetch("/api/recording/complete", {
-  //       method: "POST",
-  //       body: JSON.stringify({
-  //         uploadId: uploadConfig.uploadId,
-  //         key: uploadConfig.key,
-  //         parts: partsList.current.sort((a, b) => a.PartNumber - b.PartNumber),
-  //         roomId: roomId,
-  //         userId: socket.id,
-  //       }),
-  //     });
-  //     console.log("S3 Assembly Complete!");
-  //     setUploadConfig(null);
-  //   }
-  // });
-
   const handleStopAndFinalize = useCallback(async () => {
     if (!uploadConfig) return;
     try {
       setIsUploading(true);
-      console.log("Stopping recorder and finalizing S3 upload...");
       stopRecording();
 
       // 3. WAIT: Critical delay
@@ -130,9 +79,7 @@ const RoomPage = () => {
 
       if (finalBlob) {
         const currentPartNumber = partNumberCounter.current;
-        // partNumberCounter.current += 1;
-
-        console.log(`Uploading Final Part ${currentPartNumber}...`);
+        partNumberCounter.current += 1;
 
         // 5. Get Presigned URL for the last part
         const urlRes = await fetch("/api/recording/get-url", {
@@ -165,7 +112,6 @@ const RoomPage = () => {
           (a, b) => a.PartNumber - b.PartNumber
         );
 
-        console.log("Sending completion request to backend...");
         const completeRes = await fetch("/api/recording/complete", {
           method: "POST",
           body: JSON.stringify({
@@ -178,8 +124,6 @@ const RoomPage = () => {
         });
 
         if (!completeRes.ok) throw new Error("Failed to complete S3 assembly");
-
-        console.log("S3 Assembly Complete! Video is saved.");
       } else {
         console.warn("No parts were uploaded. Nothing to complete.");
       }
@@ -206,14 +150,6 @@ const RoomPage = () => {
             const currentPartNumber = partNumberCounter.current;
             partNumberCounter.current += 1;
 
-            console.log(
-              `Uploading Part ${currentPartNumber} (${(
-                partBlob.size /
-                1024 /
-                1024
-              ).toFixed(2)} MB)...`
-            );
-
             // 2. Get Presigned URL from Backend
             const urlRes = await fetch("/api/recording/get-url", {
               method: "POST",
@@ -238,7 +174,6 @@ const RoomPage = () => {
                 ETag: etag,
                 PartNumber: currentPartNumber,
               });
-              console.log(`Part ${currentPartNumber} uploaded successfully.`);
             }
           } catch (err) {
             console.error("Chunk upload failed:", err);
@@ -260,19 +195,16 @@ const RoomPage = () => {
       });
       if (myVideoRef.current) {
         myVideoRef.current.srcObject = stream;
-        console.log("my stream:", stream);
       }
 
       setMyStream(stream);
 
       // Add local tracks to peer connection
       stream.getTracks().forEach((track) => {
-        console.log("Adding track:", track.kind);
         peer.addTrack(track, stream);
       });
 
       setIsReady(true);
-      console.log("mic on:", isMicOn);
       socket.emit("ready-to-receive");
     } catch (error) {
       console.error("Error getting user media:", error);
@@ -281,11 +213,9 @@ const RoomPage = () => {
 
   const newUserJoined = useCallback(
     async ({ emailId }) => {
-      console.log("New user joined:", emailId);
       remoteEmailRef.current = emailId;
 
       const offer = await createOffer();
-      console.log("Sending offer to:", emailId);
       socket.emit("call-user", { emailId, offer });
     },
     [createOffer, socket]
@@ -293,11 +223,9 @@ const RoomPage = () => {
 
   const handleIncomingCall = useCallback(
     async ({ from, offer }) => {
-      console.log("Incoming call from:", from);
       remoteEmailRef.current = from;
 
       const ans = await createAnswer(offer);
-      console.log("Sending answer to:", from);
       socket.emit("call-accepted", { emailId: from, ans });
     },
     [createAnswer, socket]
@@ -305,7 +233,6 @@ const RoomPage = () => {
 
   const handleCallAccepted = useCallback(
     async ({ ans }) => {
-      console.log("Call accepted, setting remote answer");
       await setRemoteAns(ans);
     },
     [setRemoteAns]
@@ -429,8 +356,6 @@ const RoomPage = () => {
         track.enabled = newMicState;
       });
     }
-
-    console.log(`Microphone ${newMicState ? "unmuted" : "muted"}`);
   };
 
   const handleVideo = () => {
@@ -459,40 +384,7 @@ const RoomPage = () => {
         track.enabled = newVideoState;
       });
     }
-
-    console.log(`Camera ${newVideoState ? "turned on" : "turned off"}`);
   };
-
-  // const handleEndCall = () => {
-  //   if (myStream) {
-  //     myStream.getTracks().forEach((track) => {
-  //       track.stop();
-  //     });
-  //     setMyStream(null);
-  //   }
-
-  //   if (peer) {
-  //     peer.getSenders().forEach((sender) => {
-  //       try {
-  //         sender.track?.stop();
-  //       } catch (err) {}
-  //     });
-  //     peer.close();
-  //     console.log("Peer connection closed");
-  //   }
-
-  //   if (remoteEmailRef.current) {
-  //     socket.emit("end-call", { to: remoteEmailRef.current });
-  //     console.log("End call signal sent to:", remoteEmailRef.current);
-  //   }
-
-  //   if (myVideoRef.current) myVideoRef.current.srcObject = null;
-  //   if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-  //   remoteEmailRef.current = null;
-  //   setIsReady(false);
-  //   router.push("/");
-  //   console.log("Call ended successfully");
-  // };
 
   const handleEndCall = async () => {
     if (isRecording) {
