@@ -1,303 +1,513 @@
-// /app/room/[roomId]/page.js
 "use client";
-
-import { useEffect, useRef, use } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useSocket } from "@/app/providers/Socket";
+import { usePeer } from "@/app/providers/Peer";
+import { Mic, Video, PhoneOff, MoreHorizontal, CircleDot } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { useLocalRecorder } from "@/hooks/useLocalRecorder";
 
-export default function RoomPage({ params }) {
-  const { roomId } = use(params);
-  const router = useRouter();
+import RoomInfoCard from "@/app/components/card/page";
 
-  // Refs to store resources
-  const localVideoRef = useRef(null);
+const RoomPage = () => {
+  const { socket } = useSocket();
+  const { peer, createOffer, createAnswer, setRemoteAns } = usePeer();
+  const myVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const peerConnectionRef = useRef(null);
-  const webSocketRef = useRef(null);
-  const mediaStreamRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const chunkIndexRef = useRef(0);
-  const userIdRef = useRef(null);
-  const peerLeftRef = useRef(false);
-  const callEndedRef = useRef(false);
+  const remoteEmailRef = useRef(null);
+  const [isReady, setIsReady] = useState(false);
+  const [isMicOn, setIsMicOn] = useState(true);
+  const [myStream, setMyStream] = useState(null);
+  const [isVideoOn, setIsVideoOn] = useState(true);
+  const router = useRouter();
+  const [showRoomCard, setShowRoomCard] = useState(true);
+  const params = useParams();
+  const roomId = params.roomId;
+  // const [recording, setRecording] = useState(false);
+  const [uploadConfig, setUploadConfig] = useState(null);
+  const partsList = useRef([]);
+  const partNumberCounter = useRef(1);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const {
+    startRecording,
+    stopRecording,
+    bufferSize,
+    isRecording,
+    packageNextPart,
+  } = useLocalRecorder(myStream, roomId);
+
+  const initiateS3Recording = useCallback(
+    async (serverStartTime) => {
+      try {
+        const userId = socket.id;
+        const res = await fetch("/api/recording/initiate", {
+          method: "POST",
+          body: JSON.stringify({ meetingId: roomId, userId: userId }),
+        });
+        const data = await res.json();
+
+        if (data.uploadId) {
+          setUploadConfig({ uploadId: data.uploadId, key: data.key });
+          partsList.current = [];
+          partNumberCounter.current = 1;
+          startRecording(serverStartTime);
+          return true;
+        }
+      } catch (err) {
+        console.error("Failed to initiate S3 recording:", err);
+        return false;
+      }
+    },
+    [socket.id, roomId, startRecording]
+  );
+
+  const handleStopAndFinalize = useCallback(async () => {
+    if (!uploadConfig) return;
+    try {
+      setIsUploading(true);
+      stopRecording();
+
+      // 3. WAIT: Critical delay
+      // We wait 500ms-1s to ensure the MediaRecorder has finished
+      // writing the final metadata and last chunks into IndexedDB.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      // 4. Package the remaining data from IndexedDB
+      // We pass 'true' to ignore the 6MB size limit for this final part
+      const finalBlob = await packageNextPart(true);
+
+      if (finalBlob) {
+        const currentPartNumber = partNumberCounter.current;
+        partNumberCounter.current += 1;
+
+        // 5. Get Presigned URL for the last part
+        const urlRes = await fetch("/api/recording/get-url", {
+          method: "POST",
+          body: JSON.stringify({
+            uploadId: uploadConfig.uploadId,
+            key: uploadConfig.key,
+            partNumber: currentPartNumber,
+          }),
+        });
+
+        if (!urlRes.ok) throw new Error("Failed to get final part URL");
+        const { url } = await urlRes.json();
+
+        // 6. Upload final Blob to S3
+        const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
+        const etag = s3Res.headers.get("ETag");
+        if (etag) {
+          partsList.current.push({
+            ETag: etag,
+            PartNumber: currentPartNumber,
+          });
+        }
+      }
+
+      // 7. Complete the Multipart Upload
+      // S3 requires parts to be sent in ascending numerical order.
+      if (partsList.current.length > 0) {
+        const sortedParts = [...partsList.current].sort(
+          (a, b) => a.PartNumber - b.PartNumber
+        );
+
+        const completeRes = await fetch("/api/recording/complete", {
+          method: "POST",
+          body: JSON.stringify({
+            uploadId: uploadConfig.uploadId,
+            key: uploadConfig.key,
+            parts: sortedParts,
+            roomId: roomId,
+            userId: socket.id,
+          }),
+        });
+
+        if (!completeRes.ok) throw new Error("Failed to complete S3 assembly");
+      } else {
+        console.warn("No parts were uploaded. Nothing to complete.");
+      }
+    } catch (err) {
+      console.error("Recording finalization failed:", err);
+      alert("There was an error saving your recording.");
+    } finally {
+      // 8. Cleanup state
+      setUploadConfig(null);
+      setIsUploading(false);
+    }
+  }, [uploadConfig, roomId, socket.id, packageNextPart, stopRecording]);
 
   useEffect(() => {
-    // Connect to signaling server via WebSocket
-    const ws = new WebSocket("ws://localhost:3001");
-    webSocketRef.current = ws;
+    let interval;
+    if (isRecording && uploadConfig) {
+      interval = setInterval(async () => {
+        // 1. Check if we have a 6MB chunk ready in IndexedDB
+        const partBlob = await packageNextPart();
 
-    // On WebSocket open, join the room
-    ws.onopen = () => {
-      console.log("Connected to signaling server");
-      ws.send(JSON.stringify({ type: "join", roomId }));
+        if (partBlob) {
+          try {
+            setIsUploading(true);
+            const currentPartNumber = partNumberCounter.current;
+            partNumberCounter.current += 1;
+
+            // 2. Get Presigned URL from Backend
+            const urlRes = await fetch("/api/recording/get-url", {
+              method: "POST",
+              body: JSON.stringify({
+                uploadId: uploadConfig.uploadId,
+                key: uploadConfig.key,
+                partNumber: currentPartNumber,
+              }),
+            });
+            const { url } = await urlRes.json();
+
+            // 3. Upload Blob directly to S3
+            const s3Res = await fetch(url, {
+              method: "PUT",
+              body: partBlob,
+            });
+
+            // 4. Capture ETag from Headers (CRITICAL)
+            const etag = s3Res.headers.get("ETag");
+            if (etag) {
+              partsList.current.push({
+                ETag: etag,
+                PartNumber: currentPartNumber,
+              });
+            }
+          } catch (err) {
+            console.error("Chunk upload failed:", err);
+            //put the chunk back in a retry queue here (later)
+          } finally {
+            setIsUploading(false);
+          }
+        }
+      }, 10000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, uploadConfig, packageNextPart]);
+
+  const getUserMediaStream = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: true,
+      });
+      if (myVideoRef.current) {
+        myVideoRef.current.srcObject = stream;
+      }
+
+      setMyStream(stream);
+
+      // Add local tracks to peer connection
+      stream.getTracks().forEach((track) => {
+        peer.addTrack(track, stream);
+      });
+
+      setIsReady(true);
+      socket.emit("ready-to-receive");
+    } catch (error) {
+      console.error("Error getting user media:", error);
+    }
+  }, [peer, socket]);
+
+  const newUserJoined = useCallback(
+    async ({ emailId }) => {
+      remoteEmailRef.current = emailId;
+
+      const offer = await createOffer();
+      socket.emit("call-user", { emailId, offer });
+    },
+    [createOffer, socket]
+  );
+
+  const handleIncomingCall = useCallback(
+    async ({ from, offer }) => {
+      remoteEmailRef.current = from;
+
+      const ans = await createAnswer(offer);
+      socket.emit("call-accepted", { emailId: from, ans });
+    },
+    [createAnswer, socket]
+  );
+
+  const handleCallAccepted = useCallback(
+    async ({ ans }) => {
+      await setRemoteAns(ans);
+    },
+    [setRemoteAns]
+  );
+
+  useEffect(() => {
+    peer.ontrack = (event) => {
+      const [stream] = event.streams;
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = stream;
+      }
     };
+  }, [peer]);
 
-    ws.onmessage = async (message) => {
-      const { type, payload } = JSON.parse(message.data);
-      const pc = peerConnectionRef.current;
-      if (!pc) return;
-
-      try {
-        if (type === "offer") {
-          // Handle offer from remote
-          await pc.setRemoteDescription(new RTCSessionDescription(payload));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          sendMessage("answer", answer);
-        }
-
-        if (type === "answer" && pc.signalingState === "have-local-offer") {
-          // Set answer from remote
-          await pc.setRemoteDescription(new RTCSessionDescription(payload));
-        }
-
-        if (type === "ice-candidate" && pc.remoteDescription) {
-          // Add ICE candidate from remote
-          await pc.addIceCandidate(new RTCIceCandidate(payload));
-        }
-
-        if (type === "peer-left") {
-          // Mark that the other peer has left
-          peerLeftRef.current = true;
-          checkIfShouldStop();
-        }
-      } catch (err) {
-        console.error("Signaling error:", err);
+  useEffect(() => {
+    peer.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit("ice-candidate", {
+          candidate: event.candidate,
+          to: remoteEmailRef.current,
+        });
       }
     };
 
-    initMediaAndPeer();
+    socket.on("ice-candidate", async ({ candidate }) => {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error("Error adding ICE candidate:", error);
+      }
+    });
 
-    // Cleanup on unmount
     return () => {
-      sendMessage("peer-left", null);
-      webSocketRef.current?.close();
+      socket.off("ice-candidate");
     };
-  }, []);
+  }, [peer, socket]);
 
-  // Send a signaling message via WebSocket
-  const sendMessage = (type, payload) => {
-    const ws = webSocketRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn("⚠️ WebSocket not ready. Retrying...");
-      setTimeout(() => sendMessage(type, payload), 500);
+  useEffect(() => {
+    getUserMediaStream();
+  }, [getUserMediaStream]);
+
+  useEffect(() => {
+    socket.on("joined-room", ({ roomId }) => {});
+
+    return () => {
+      socket.off("joined-room");
+    };
+  }, [socket]);
+
+  useEffect(() => {
+    socket.on("user-joined", newUserJoined);
+    socket.on("incoming-call", handleIncomingCall);
+    socket.on("call-accepted", handleCallAccepted);
+
+    return () => {
+      socket.off("user-joined", newUserJoined);
+      socket.off("incoming-call", handleIncomingCall);
+      socket.off("call-accepted", handleCallAccepted);
+    };
+  }, [socket, newUserJoined, handleIncomingCall, handleCallAccepted]);
+
+  useEffect(() => {
+    // Listen for the "Start" signal from the other peer
+    socket.on("start-recording-trigger", async ({ startTime }) => {
+      await initiateS3Recording(startTime);
+    });
+
+    // Listen for the "Stop" signal
+    socket.on("stop-recording-trigger", async () => {
+      await handleStopAndFinalize();
+    });
+
+    return () => {
+      socket.off("start-recording-trigger");
+      socket.off("stop-recording-trigger");
+    };
+  }, [socket, roomId, initiateS3Recording, handleStopAndFinalize]);
+
+  const handleMic = () => {
+    if (!peer) return;
+
+    // Find all audio senders (tracks being sent to remote peer)
+    const audioSenders = peer
+      .getSenders()
+      .filter((sender) => sender.track && sender.track.kind === "audio");
+
+    if (audioSenders.length === 0) {
+      console.warn("No audio senders found");
       return;
     }
-    ws.send(JSON.stringify({ type, roomId, payload }));
-  };
 
-  // Capture local media and initialize WebRTC connection
-  const initMediaAndPeer = async () => {
-    // Request access to camera and mic
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-    mediaStreamRef.current = stream;
+    const newMicState = !isMicOn;
+    setIsMicOn(newMicState);
 
-    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-
-    userIdRef.current =
-      localStorage.getItem("userId") || Math.random().toString(36).slice(2, 8);
-    localStorage.setItem("userId", userIdRef.current);
-    chunkIndexRef.current = 0;
-
-    const pc = new RTCPeerConnection();
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) sendMessage("ice-candidate", event.candidate);
-    };
-
-    pc.ontrack = (event) => {
-      if (remoteVideoRef.current)
-        remoteVideoRef.current.srcObject = event.streams[0];
-    };
-
-    peerConnectionRef.current = pc;
-
-    setTimeout(async () => {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sendMessage("offer", offer);
-    }, Math.random() * 1000);
-
-    await waitForRemoteVideo();
-
-    startMixedRecording();
-  };
-
-  // Wait until remote video is ready
-  const waitForRemoteVideo = () =>
-    new Promise((resolve) => {
-      const check = () => {
-        if (remoteVideoRef.current?.readyState >= 2) resolve();
-        else setTimeout(check, 500);
-      };
-      check();
+    // Toggle both sender and local stream track (for UI consistency)
+    audioSenders.forEach((sender) => {
+      sender.track.enabled = newMicState;
     });
 
-  // Capture a combined stream of local + remote using a canvas
-  const startMixedRecording = () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
-    const ctx = canvas.getContext("2d");
-
-    const drawFrame = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (localVideoRef.current?.readyState >= 2) {
-        ctx.drawImage(
-          localVideoRef.current,
-          0,
-          0,
-          canvas.width / 2,
-          canvas.height
-        );
-      }
-      if (remoteVideoRef.current?.readyState >= 2) {
-        ctx.drawImage(
-          remoteVideoRef.current,
-          canvas.width / 2,
-          0,
-          canvas.width / 2,
-          canvas.height
-        );
-      }
-      requestAnimationFrame(drawFrame);
-    };
-    drawFrame();
-
-    const mixedStream = canvas.captureStream(25);
-
-    const mediaRecorder = new MediaRecorder(mixedStream, {
-      mimeType: "video/webm; codecs=vp8,opus",
-      videoBitsPerSecond: 2_500_000,
-    });
-
-    mediaRecorder.ondataavailable = async (event) => {
-      if (callEndedRef.current || !event.data || event.data.size === 0) return;
-
-      const chunk = event.data;
-      const userId = userIdRef.current;
-      const chunkIndex = chunkIndexRef.current++;
-      const key = `recordings/${roomId}/user-${userId}/chunk-${String(
-        chunkIndex
-      ).padStart(4, "0")}.webm`;
-
-      try {
-        const res = await fetch(`/api/upload-url?key=${key}`);
-        const { url } = await res.json();
-        await fetch(url, {
-          method: "PUT",
-          headers: { "Content-Type": "video/webm" },
-          body: chunk,
-        });
-        console.log(`Uploaded chunk ${chunkIndex} → ${key}`);
-      } catch (error) {
-        console.error(`Failed to upload chunk ${chunkIndex}`, error);
-      }
-    };
-
-    // On recording stop, trigger video merge
-    mediaRecorder.onstop = async () => {
-      console.log("Mixed recording stopped");
-      try {
-        const res = await fetch("/api/merge", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomId }),
-        });
-        if (!res.ok) throw new Error("Merge failed");
-        const data = await res.json();
-        console.log("Merge complete:", data);
-      } catch (err) {
-        console.error("Merge failed:", err);
-      }
-    };
-
-    mediaRecorder.start(2000);
-    mediaRecorderRef.current = mediaRecorder;
-  };
-
-  const checkIfShouldStop = () => {
-    if (
-      peerLeftRef.current &&
-      mediaRecorderRef.current?.state === "recording"
-    ) {
-      console.log("⚠️ Peer left, stopping recording...");
-      mediaRecorderRef.current.stop();
-    }
-  };
-  r;
-  const handleEndCall = async () => {
-    callEndedRef.current = true;
-
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-
-    sendMessage("peer-left", null);
-    router.push("/");
-
-    // Attempt to merge chunks
-    try {
-      const res = await fetch("/api/merge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId }),
+    if (myStream) {
+      myStream.getAudioTracks().forEach((track) => {
+        track.enabled = newMicState;
       });
-      if (!res.ok) throw new Error("Merge failed");
-      const data = await res.json();
-      alert("Video merged and uploaded!");
-    } catch (err) {
-      console.error("Merge error:", err);
-      alert("Merge failed. Please try again.");
+    }
+  };
+
+  const handleVideo = () => {
+    if (!peer) return;
+
+    const videoSenders = peer
+      .getSenders()
+      .filter((sender) => sender.track && sender.track.kind === "video");
+
+    if (videoSenders.length === 0) {
+      console.warn("No video senders found");
+      return;
+    }
+
+    const newVideoState = !isVideoOn;
+    setIsVideoOn(newVideoState);
+
+    // Toggle video tracks being sent
+    videoSenders.forEach((sender) => {
+      sender.track.enabled = newVideoState;
+    });
+
+    // Also toggle local preview video
+    if (myStream) {
+      myStream.getVideoTracks().forEach((track) => {
+        track.enabled = newVideoState;
+      });
+    }
+  };
+
+  const handleEndCall = async () => {
+    if (isRecording) {
+      socket.emit("stop-recording-trigger", { roomId });
+      await handleStopAndFinalize();
+    }
+
+    if (myStream) myStream.getTracks().forEach((t) => t.stop());
+    if (peer) {
+      peer.getSenders().forEach((s) => s.track?.stop());
+      peer.close();
+    }
+    if (remoteEmailRef.current)
+      socket.emit("end-call", { to: remoteEmailRef.current });
+    router.push("/");
+  };
+
+  const handleRecording = async () => {
+    if (!isRecording) {
+      const serverTimestamp = Date.now();
+      const success = await initiateS3Recording(serverTimestamp);
+      if (success) {
+        socket.emit("start-recording-trigger", {
+          roomId,
+          startTime: serverTimestamp,
+        });
+      }
+    } else {
+      // We stop locally, which triggers the finalize logic
+      socket.emit("stop-recording-trigger", { roomId });
+      await handleStopAndFinalize();
     }
   };
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Room: {roomId}</h1>
+    <div className="relative w-full h-screen bg-gray-900">
+      {/* Remote Video (Full Screen) */}
+      <video
+        ref={remoteVideoRef}
+        autoPlay
+        playsInline
+        className="w-full h-full object-cover"
+      />
 
-      {/* Video preview section */}
-      <div style={{ display: "flex", gap: 20 }}>
-        <div>
-          <h3>🎥 Local</h3>
-          <video
-            ref={localVideoRef}
-            autoPlay
-            muted
-            playsInline
-            style={{ width: 300, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-        </div>
-        <div>
-          <h3>👥 Remote</h3>
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            muted
-            playsInline
-            style={{ width: 300, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-        </div>
+      {/* My Video (Picture-in-Picture) */}
+      <div className="absolute top-4 right-4 w-48 h-36 bg-gray-800 rounded-lg overflow-hidden shadow-2xl border-2 border-gray-700">
+        <video
+          ref={myVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover transform -scale-x-100"
+        />
       </div>
 
-      {/* End call button */}
-      <button
-        onClick={handleEndCall}
-        style={{
-          marginTop: 20,
-          padding: "10px 20px",
-          backgroundColor: "#d33",
-          color: "white",
-          border: "none",
-          borderRadius: 6,
-          cursor: "pointer",
-        }}
-      >
-        📞 End Call
-      </button>
+      {showRoomCard && (
+        <RoomInfoCard roomId={roomId} onClose={() => setShowRoomCard(false)} />
+      )}
+
+      {/* Status Bar (Top) */}
+      <div className="absolute top-4 left-4 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
+        <div className="flex items-center gap-2 text-white text-sm">
+          <div
+            className={`w-2 h-2 rounded-full ${
+              isReady ? "bg-green-500" : "bg-yellow-500"
+            }`}
+          />
+          <span>{isReady ? "Connected" : "Setting up..."}</span>
+        </div>
+        {remoteEmailRef.current && (
+          <div className="text-white text-xs mt-1">
+            {remoteEmailRef.current}
+          </div>
+        )}
+      </div>
+
+      {/* Control Bar (Bottom) */}
+      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-70 px-6 py-4 rounded-full flex items-center gap-4">
+        {/* Mic Button */}
+        <button
+          onClick={handleMic}
+          className={`w-12 h-12 ${
+            isMicOn
+              ? "bg-red-700 hover:bg-red-800"
+              : "bg-gray-700 hover:bg-gray-600"
+          } rounded-full flex items-center justify-center text-white transition`}
+        >
+          <Mic className="w-6 h-6" />
+        </button>
+
+        {/* Video Button */}
+        <button
+          onClick={handleVideo}
+          className={`w-12 h-12 ${
+            isVideoOn
+              ? "bg-red-700 hover:bg-red-800"
+              : "bg-gray-700 hover:bg-gray-600"
+          } rounded-full flex items-center justify-center text-white transition`}
+        >
+          <Video className="w-6 h-6" />
+        </button>
+
+        {/* Record Button */}
+        <button
+          onClick={handleRecording}
+          className={`w-12 h-12 ${
+            isRecording ? "bg-red-600 animate-pulse" : "bg-gray-700"
+          } rounded-full flex items-center justify-center text-white transition relative`}
+          title={isRecording ? "Stop Recording" : "Start Recording"}
+        >
+          <CircleDot
+            className={`w-6 h-6 ${isRecording ? "fill-white" : "text-red-500"}`}
+          />
+          {isRecording && (
+            <span className="absolute top-2 right-2 flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+            </span>
+          )}
+        </button>
+
+        {/* Meeting Details Button */}
+        <button
+          onClick={() => setShowRoomCard(!showRoomCard)}
+          className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition hover:bg-gray-600 ${
+            showRoomCard ? "bg-violet-600" : "bg-gray-700"
+          }`}
+          title="Meeting Details"
+        >
+          <MoreHorizontal className="w-5 h-5" />
+        </button>
+
+        {/* End Call Button */}
+        <button
+          onClick={handleEndCall}
+          className="w-12 h-12 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center text-white transition"
+        >
+          <PhoneOff className="w-6 h-6" />
+        </button>
+      </div>
     </div>
   );
-}
+};
+
+export default RoomPage;
