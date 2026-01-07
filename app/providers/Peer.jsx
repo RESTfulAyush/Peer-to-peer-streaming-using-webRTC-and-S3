@@ -20,11 +20,11 @@ export const PeerProvider = (props) => {
 
     // Add connection state logging
     peerConnection.onconnectionstatechange = () => {
-      console.log("Peer connection state:", peerConnection.connectionState);
+      // console.log("Peer connection state:", peerConnection.connectionState);
     };
 
     peerConnection.oniceconnectionstatechange = () => {
-      console.log("ICE connection state:", peerConnection.iceConnectionState);
+      // console.log("ICE connection state:", peerConnection.iceConnectionState);
     };
 
     return peerConnection;

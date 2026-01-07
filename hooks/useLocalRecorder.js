@@ -43,14 +43,6 @@ export const useLocalRecorder = (stream, meetingId) => {
 
         await recordingDb.deleteChunk(idsToDelete);
         await updateBufferSize();
-
-        console.log(
-          `Packaged ${isFinal ? "Final" : "Part"}: ${(
-            currentSize /
-            1024 /
-            1024
-          ).toFixed(2)} MB`
-        );
         return blobPart;
       }
 

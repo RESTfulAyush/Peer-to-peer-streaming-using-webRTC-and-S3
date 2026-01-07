@@ -240,27 +240,16 @@ const RoomPage = () => {
 
   useEffect(() => {
     peer.ontrack = (event) => {
-      console.log("Received remote track:", event.track.kind);
       const [stream] = event.streams;
-      console.log("Remote stream received:", stream);
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream;
       }
-    };
-
-    peer.onconnectionstatechange = () => {
-      console.log("Connection state:", peer.connectionState);
-    };
-
-    peer.oniceconnectionstatechange = () => {
-      console.log("ICE connection state:", peer.iceConnectionState);
     };
   }, [peer]);
 
   useEffect(() => {
     peer.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("Sending ICE candidate to:", remoteEmailRef.current);
         socket.emit("ice-candidate", {
           candidate: event.candidate,
           to: remoteEmailRef.current,
@@ -269,10 +258,8 @@ const RoomPage = () => {
     };
 
     socket.on("ice-candidate", async ({ candidate }) => {
-      console.log("Received ICE candidate");
       try {
         await peer.addIceCandidate(new RTCIceCandidate(candidate));
-        console.log("ICE candidate added successfully");
       } catch (error) {
         console.error("Error adding ICE candidate:", error);
       }
@@ -310,17 +297,11 @@ const RoomPage = () => {
   useEffect(() => {
     // Listen for the "Start" signal from the other peer
     socket.on("start-recording-trigger", async ({ startTime }) => {
-      console.log(
-        "Received remote start signal. Initiating S3 + Local Recorder..."
-      );
-      // startRecording(startTime);
       await initiateS3Recording(startTime);
     });
 
     // Listen for the "Stop" signal
     socket.on("stop-recording-trigger", async () => {
-      console.log("Received remote stop signal. Finalizing S3 upload...");
-      // stopRecording();
       await handleStopAndFinalize();
     });
 
