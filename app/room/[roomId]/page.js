@@ -37,6 +37,162 @@ const RoomPage = () => {
     packageNextPart,
   } = useLocalRecorder(myStream, roomId);
 
+  const initiateS3Recording = useCallback(
+    async (serverStartTime) => {
+      try {
+        const userId = socket.id;
+        const res = await fetch("/api/recording/initiate", {
+          method: "POST",
+          body: JSON.stringify({ meetingId: roomId, userId: userId }),
+        });
+        const data = await res.json();
+
+        if (data.uploadId) {
+          setUploadConfig({ uploadId: data.uploadId, key: data.key });
+          partsList.current = [];
+          partNumberCounter.current = 1;
+          startRecording(serverStartTime);
+          return true;
+        }
+      } catch (err) {
+        console.error("Failed to initiate S3 recording:", err);
+        return false;
+      }
+    },
+    [socket.id, roomId, startRecording]
+  );
+
+  // const handleStopAndFinalize = useCallback(async () => {
+  //   if (!uploadConfig) return;
+  //   // 1. Stop the recorder (this stops the camera stream into IndexedDB)
+  //   stopRecording();
+  //   socket.emit("stop-recording-trigger", { roomId });
+
+  //   console.log("Finalizing recording... packaging last chunks");
+
+  //   // 2. MANUALLY get the last part from the hook
+  //   // We pass 'true' because this is the end of the call (size doesn't matter)
+  //   const finalBlob = await packageNextPart(true);
+
+  //   if (finalBlob && uploadConfig) {
+  //     // 3. Upload this last piece to S3
+  //     const currentPartNumber = partNumberCounter.current;
+
+  //     const urlRes = await fetch("/api/recording/get-url", {
+  //       method: "POST",
+  //       body: JSON.stringify({
+  //         uploadId: uploadConfig.uploadId,
+  //         key: uploadConfig.key,
+  //         partNumber: currentPartNumber,
+  //       }),
+  //     });
+  //     const { url } = await urlRes.json();
+
+  //     const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
+  //     const etag = s3Res.headers.get("ETag");
+
+  //     if (etag) {
+  //       partsList.current.push({ ETag: etag, PartNumber: currentPartNumber });
+  //     }
+  //   }
+
+  //   if (uploadConfig && partsList.current.length > 0) {
+  //     await fetch("/api/recording/complete", {
+  //       method: "POST",
+  //       body: JSON.stringify({
+  //         uploadId: uploadConfig.uploadId,
+  //         key: uploadConfig.key,
+  //         parts: partsList.current.sort((a, b) => a.PartNumber - b.PartNumber),
+  //         roomId: roomId,
+  //         userId: socket.id,
+  //       }),
+  //     });
+  //     console.log("S3 Assembly Complete!");
+  //     setUploadConfig(null);
+  //   }
+  // });
+
+  const handleStopAndFinalize = useCallback(async () => {
+    if (!uploadConfig) return;
+    try {
+      setIsUploading(true);
+      console.log("Stopping recorder and finalizing S3 upload...");
+      stopRecording();
+
+      // 3. WAIT: Critical delay
+      // We wait 500ms-1s to ensure the MediaRecorder has finished
+      // writing the final metadata and last chunks into IndexedDB.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      // 4. Package the remaining data from IndexedDB
+      // We pass 'true' to ignore the 6MB size limit for this final part
+      const finalBlob = await packageNextPart(true);
+
+      if (finalBlob) {
+        const currentPartNumber = partNumberCounter.current;
+        // partNumberCounter.current += 1;
+
+        console.log(`Uploading Final Part ${currentPartNumber}...`);
+
+        // 5. Get Presigned URL for the last part
+        const urlRes = await fetch("/api/recording/get-url", {
+          method: "POST",
+          body: JSON.stringify({
+            uploadId: uploadConfig.uploadId,
+            key: uploadConfig.key,
+            partNumber: currentPartNumber,
+          }),
+        });
+
+        if (!urlRes.ok) throw new Error("Failed to get final part URL");
+        const { url } = await urlRes.json();
+
+        // 6. Upload final Blob to S3
+        const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
+        const etag = s3Res.headers.get("ETag");
+        if (etag) {
+          partsList.current.push({
+            ETag: etag,
+            PartNumber: currentPartNumber,
+          });
+        }
+      }
+
+      // 7. Complete the Multipart Upload
+      // S3 requires parts to be sent in ascending numerical order.
+      if (partsList.current.length > 0) {
+        const sortedParts = [...partsList.current].sort(
+          (a, b) => a.PartNumber - b.PartNumber
+        );
+
+        console.log("Sending completion request to backend...");
+        const completeRes = await fetch("/api/recording/complete", {
+          method: "POST",
+          body: JSON.stringify({
+            uploadId: uploadConfig.uploadId,
+            key: uploadConfig.key,
+            parts: sortedParts,
+            roomId: roomId,
+            userId: socket.id,
+          }),
+        });
+
+        if (!completeRes.ok) throw new Error("Failed to complete S3 assembly");
+
+        console.log("S3 Assembly Complete! Video is saved.");
+      } else {
+        console.warn("No parts were uploaded. Nothing to complete.");
+      }
+    } catch (err) {
+      console.error("Recording finalization failed:", err);
+      alert("There was an error saving your recording.");
+    } finally {
+      // 8. Cleanup state
+      setUploadConfig(null);
+      setIsUploading(false);
+    }
+  }, [uploadConfig, roomId, socket.id, packageNextPart, stopRecording]);
+
   useEffect(() => {
     let interval;
     if (isRecording && uploadConfig) {
@@ -237,7 +393,7 @@ const RoomPage = () => {
     // Listen for the "Stop" signal
     socket.on("stop-recording-trigger", async () => {
       console.log("Received remote stop signal. Finalizing S3 upload...");
-      stopRecording();
+      // stopRecording();
       await handleStopAndFinalize();
     });
 
@@ -246,31 +402,6 @@ const RoomPage = () => {
       socket.off("stop-recording-trigger");
     };
   }, [socket, roomId, initiateS3Recording, handleStopAndFinalize]);
-
-  const initiateS3Recording = useCallback(
-    async (serverStartTime) => {
-      try {
-        const userId = socket.id;
-        const res = await fetch("/api/recording/initiate", {
-          method: "POST",
-          body: JSON.stringify({ meetingId: roomId, userId: userId }),
-        });
-        const data = await res.json();
-
-        if (data.uploadId) {
-          setUploadConfig({ uploadId: data.uploadId, key: data.key });
-          partsList.current = [];
-          partNumberCounter.current = 1;
-          startRecording(serverStartTime);
-          return true;
-        }
-      } catch (err) {
-        console.error("Failed to initiate S3 recording:", err);
-        return false;
-      }
-    },
-    [socket.id, roomId, startRecording]
-  );
 
   const handleMic = () => {
     if (!peer) return;
@@ -363,9 +494,11 @@ const RoomPage = () => {
   //   console.log("Call ended successfully");
   // };
 
-  const handleEndCall = () => {
-    // If we are recording, we must finalize before leaving
-    if (isRecording) handleStopAndFinalize();
+  const handleEndCall = async () => {
+    if (isRecording) {
+      socket.emit("stop-recording-trigger", { roomId });
+      await handleStopAndFinalize();
+    }
 
     if (myStream) myStream.getTracks().forEach((t) => t.stop());
     if (peer) {
@@ -389,58 +522,8 @@ const RoomPage = () => {
       }
     } else {
       // We stop locally, which triggers the finalize logic
-      await handleStopAndFinalize();
-      // Tell peer to stop and finalize
       socket.emit("stop-recording-trigger", { roomId });
-    }
-  };
-
-  const handleStopAndFinalize = async () => {
-    // 1. Stop the recorder (this stops the camera stream into IndexedDB)
-    stopRecording();
-    socket.emit("stop-recording-trigger", { roomId });
-
-    console.log("Finalizing recording... packaging last chunks");
-
-    // 2. MANUALLY get the last part from the hook
-    // We pass 'true' because this is the end of the call (size doesn't matter)
-    const finalBlob = await packageNextPart(true);
-
-    if (finalBlob && uploadConfig) {
-      // 3. Upload this last piece to S3
-      const currentPartNumber = partNumberCounter.current;
-
-      const urlRes = await fetch("/api/recording/get-url", {
-        method: "POST",
-        body: JSON.stringify({
-          uploadId: uploadConfig.uploadId,
-          key: uploadConfig.key,
-          partNumber: currentPartNumber,
-        }),
-      });
-      const { url } = await urlRes.json();
-
-      const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
-      const etag = s3Res.headers.get("ETag");
-
-      if (etag) {
-        partsList.current.push({ ETag: etag, PartNumber: currentPartNumber });
-      }
-    }
-
-    if (uploadConfig && partsList.current.length > 0) {
-      await fetch("/api/recording/complete", {
-        method: "POST",
-        body: JSON.stringify({
-          uploadId: uploadConfig.uploadId,
-          key: uploadConfig.key,
-          parts: partsList.current.sort((a, b) => a.PartNumber - b.PartNumber),
-          roomId: roomId,
-          userId: socket.id,
-        }),
-      });
-      console.log("S3 Assembly Complete!");
-      setUploadConfig(null);
+      await handleStopAndFinalize();
     }
   };
 
@@ -512,7 +595,7 @@ const RoomPage = () => {
           <Video className="w-6 h-6" />
         </button>
 
-        {/* NEW: Record Button */}
+        {/* Record Button */}
         <button
           onClick={handleRecording}
           className={`w-12 h-12 ${
