@@ -67,7 +67,28 @@ export async function POST(req) {
       const user1Data = await getS3Json(statusFiles[0].Key);
       const user2Data = await getS3Json(statusFiles[1].Key);
 
-      await triggerMediaConvert(roomId, user1Data.videoKey, user2Data.videoKey);
+      const lockKey = `recordings/${roomId}/merge_lock.json`;
+      try {
+        await s3Client.send(
+          new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: lockKey,
+            Body: JSON.stringify({ triggered: true, timestamp: Date.now() }),
+            // This will fail if the file already exists (poor man's lock)
+          })
+        );
+
+        // Only trigger if we successfully created the lock
+        await triggerMediaConvert(
+          roomId,
+          user1Data.videoKey,
+          user2Data.videoKey
+        );
+      } catch (err) {
+        console.log("Merge already triggered by other user");
+      }
+
+      // await triggerMediaConvert(roomId, user1Data.videoKey, user2Data.videoKey);
       return NextResponse.json({
         success: true,
         message: "Merge triggered successfully",

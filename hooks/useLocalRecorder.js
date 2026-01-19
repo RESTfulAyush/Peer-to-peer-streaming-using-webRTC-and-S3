@@ -67,18 +67,38 @@ export const useLocalRecorder = (stream, meetingId) => {
       }
     };
 
-    // Request data every 1 second (1000ms)
+    // Request data every 1 second
     recorder.start(1000);
     mediaRecorderRef.current = recorder;
-    setIsRecording(true);
+    setIsRecording(true); // Set here on start
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-    }
-  };
+  // const stopRecording = () => {
+  //   if (mediaRecorderRef.current) {
+  //     mediaRecorderRef.current.stop();
+  //     setIsRecording(false);
+  //   }
+  // };
+
+  const stopRecording = useCallback(() => {
+    return new Promise((resolve) => {
+      const recorder = mediaRecorderRef.current;
+
+      if (!recorder || recorder.state === "inactive") {
+        resolve();
+        return;
+      }
+
+      // Set up the stop handler BEFORE calling stop()
+      recorder.onstop = () => {
+        setIsRecording(false);
+        resolve(); // Resolve only when MediaRecorder confirms it stopped
+      };
+
+      // Now request the stop
+      recorder.stop();
+    });
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {

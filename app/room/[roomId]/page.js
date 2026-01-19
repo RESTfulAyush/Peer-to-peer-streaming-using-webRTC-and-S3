@@ -64,24 +64,25 @@ const RoomPage = () => {
 
   const handleStopAndFinalize = useCallback(async () => {
     if (!uploadConfig) return;
+
     try {
       setIsUploading(true);
-      stopRecording();
 
-      // 3. WAIT: Critical delay
-      // We wait 500ms-1s to ensure the MediaRecorder has finished
-      // writing the final metadata and last chunks into IndexedDB.
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // Wait for MediaRecorder to fully stop and flush all data
+      await stopRecording();
 
-      // 4. Package the remaining data from IndexedDB
-      // We pass 'true' to ignore the 6MB size limit for this final part
+      // Small additional buffer to ensure IndexedDB writes complete
+      // This is much safer than the 800ms guess
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // Now package the remaining data from IndexedDB
       const finalBlob = await packageNextPart(true);
 
       if (finalBlob) {
         const currentPartNumber = partNumberCounter.current;
         partNumberCounter.current += 1;
 
-        // 5. Get Presigned URL for the last part
+        // Get Presigned URL for the last part
         const urlRes = await fetch("/api/recording/get-url", {
           method: "POST",
           body: JSON.stringify({
@@ -94,9 +95,10 @@ const RoomPage = () => {
         if (!urlRes.ok) throw new Error("Failed to get final part URL");
         const { url } = await urlRes.json();
 
-        // 6. Upload final Blob to S3
+        // Upload final Blob to S3
         const s3Res = await fetch(url, { method: "PUT", body: finalBlob });
         const etag = s3Res.headers.get("ETag");
+
         if (etag) {
           partsList.current.push({
             ETag: etag,
@@ -105,8 +107,7 @@ const RoomPage = () => {
         }
       }
 
-      // 7. Complete the Multipart Upload
-      // S3 requires parts to be sent in ascending numerical order.
+      // Complete the Multipart Upload
       if (partsList.current.length > 0) {
         const sortedParts = [...partsList.current].sort(
           (a, b) => a.PartNumber - b.PartNumber
@@ -131,7 +132,7 @@ const RoomPage = () => {
       console.error("Recording finalization failed:", err);
       alert("There was an error saving your recording.");
     } finally {
-      // 8. Cleanup state
+      // Cleanup state
       setUploadConfig(null);
       setIsUploading(false);
     }
@@ -182,7 +183,7 @@ const RoomPage = () => {
             setIsUploading(false);
           }
         }
-      }, 10000);
+      }, 3000);
     }
     return () => clearInterval(interval);
   }, [isRecording, uploadConfig, packageNextPart]);
@@ -295,12 +296,11 @@ const RoomPage = () => {
   }, [socket, newUserJoined, handleIncomingCall, handleCallAccepted]);
 
   useEffect(() => {
-    // Listen for the "Start" signal from the other peer
     socket.on("start-recording-trigger", async ({ startTime }) => {
+      // BOTH users initiate from the socket event
       await initiateS3Recording(startTime);
     });
 
-    // Listen for the "Stop" signal
     socket.on("stop-recording-trigger", async () => {
       await handleStopAndFinalize();
     });
@@ -386,17 +386,14 @@ const RoomPage = () => {
   const handleRecording = async () => {
     if (!isRecording) {
       const serverTimestamp = Date.now();
-      const success = await initiateS3Recording(serverTimestamp);
-      if (success) {
-        socket.emit("start-recording-trigger", {
-          roomId,
-          startTime: serverTimestamp,
-        });
-      }
+
+      // ONLY emit, don't initiate locally
+      socket.emit("start-recording-trigger", {
+        roomId,
+        startTime: serverTimestamp,
+      });
     } else {
-      // We stop locally, which triggers the finalize logic
       socket.emit("stop-recording-trigger", { roomId });
-      await handleStopAndFinalize();
     }
   };
 
