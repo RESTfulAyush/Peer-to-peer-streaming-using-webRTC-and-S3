@@ -23,7 +23,7 @@ export async function POST(req) {
       console.error("Missing userId or roomId:", { userId, roomId });
       return NextResponse.json(
         { error: "Missing userId or roomId" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -49,7 +49,7 @@ export async function POST(req) {
           timestamp: Date.now(),
         }),
         ContentType: "application/json",
-      })
+      }),
     );
 
     // 3. Check if the OTHER user is finished
@@ -75,14 +75,15 @@ export async function POST(req) {
             Key: lockKey,
             Body: JSON.stringify({ triggered: true, timestamp: Date.now() }),
             // This will fail if the file already exists (poor man's lock)
-          })
+          }),
         );
-
+        console.log("user1 data:", user1Data);
+        console.log("user2 data:", user2Data);
         // Only trigger if we successfully created the lock
         await triggerMediaConvert(
           roomId,
           user1Data.videoKey,
-          user2Data.videoKey
+          user2Data.videoKey,
         );
       } catch (err) {
         console.log("Merge already triggered by other user");
